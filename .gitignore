@@ -1,3 +1,14 @@
+# CMake build output
+build/
+
+# STM32CubeMX / CubeIDE
+*.launch
+.cproject
+.project
+
+# VS Code (optional — keep local unless you want to share configs)
+.vscode/
+
 # Prerequisites
 *.d
 
