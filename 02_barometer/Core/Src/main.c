@@ -26,7 +26,20 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef struct {
+    uint16_t dig_T1;
+    int16_t dig_T2;
+    int16_t dig_T3;
+    uint16_t dig_P1;
+    int16_t dig_P2;
+    int16_t dig_P3;
+    int16_t dig_P4;
+    int16_t dig_P5;
+    int16_t dig_P6;
+    int16_t dig_P7;
+    int16_t dig_P8;
+    int16_t dig_P9;
+} BMP280_Calib;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -45,7 +58,7 @@ SPI_HandleTypeDef hspi1;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-
+BMP280_Calib calib; // Structure to hold calibration data
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -55,6 +68,8 @@ static void MX_USART2_UART_Init(void);
 static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
 uint8_t BMP280_ReadRegister(uint8_t reg); // Function to read a register from the BMP280 sensor
+void BMP280ReadRegisters(uint8_t reg, uint8_t *buffer, uint16_t len); // Function to read multiple registers from the BMP280 sensor
+void BMP280_ReadCalibration(void); // Function to read calibration data from the BMP280 sensor
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -101,6 +116,13 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   uint8_t chip_id = BMP280_ReadRegister(0xD0); // Read the chip ID register
   printf("BMP280 Chip ID: 0x%02X\r\n", chip_id); // Print the chip ID to UART
+
+  BMP280_ReadCalibration(); // Read calibration data from the sensor
+  printf("dig_T1 = %u\r\n", calib.dig_T1);
+  printf("dig_T2 = %d\r\n", calib.dig_T2);
+  printf("dig_T3 = %d\r\n", calib.dig_T3);
+  printf("dig_P1 = %u\r\n", calib.dig_P1);
+  printf("dig_P9 = %d\r\n", calib.dig_P9);
 
   while (1)
   {
@@ -288,6 +310,35 @@ uint8_t BMP280_ReadRegister(uint8_t reg)
   HAL_GPIO_WritePin(BMP_CS_GPIO_Port, BMP_CS_Pin, GPIO_PIN_SET); // CS High: End communication
 
   return rx[1]; // The sensors answers landed in the second byte   
+}
+
+void BMP280ReadRegisters(uint8_t reg, uint8_t *buffer, uint16_t len)
+{
+  uint8_t addr = reg | 0x80; // Address byte, bit 7 set = READ
+
+  HAL_GPIO_WritePin(BMP_CS_GPIO_Port, BMP_CS_Pin, GPIO_PIN_RESET); // CS Low: Start communication
+  HAL_SPI_Transmit(&hspi1, &addr, 1, HAL_MAX_DELAY); // exchange registers
+  HAL_SPI_Receive(&hspi1, buffer, len, HAL_MAX_DELAY); // receive data
+  HAL_GPIO_WritePin(BMP_CS_GPIO_Port, BMP_CS_Pin, GPIO_PIN_SET); // CS High: End communication
+}
+
+void BMP280_ReadCalibration(void)
+{
+  uint8_t buf[24]; // Buffer to hold calibration data
+  BMP280ReadRegisters(0x88, buf, 24); // Read 24 bytes of calibration data starting from register 0x88
+
+  calib.dig_T1 = (uint16_t)((buf[1] << 8) | buf[0]);
+  calib.dig_T2 = (int16_t)((buf[3] << 8) | buf[2]);
+  calib.dig_T3 = (int16_t)((buf[5] << 8) | buf[4]);
+  calib.dig_P1 = (uint16_t)((buf[7] << 8) | buf[6]);
+  calib.dig_P2 = (int16_t)((buf[9] << 8) | buf[8]);
+  calib.dig_P3 = (int16_t)((buf[11] << 8) | buf[10]);
+  calib.dig_P4 = (int16_t)((buf[13] << 8) | buf[12]);
+  calib.dig_P5 = (int16_t)((buf[15] << 8) | buf[14]);
+  calib.dig_P6 = (int16_t)((buf[17] << 8) | buf[16]);
+  calib.dig_P7 = (int16_t)((buf[19] << 8) | buf[18]);
+  calib.dig_P8 = (int16_t)((buf[21] << 8) | buf[20]);
+  calib.dig_P9 = (int16_t)((buf[23] << 8) | buf[22]);
 }
 
 /* USER CODE END 4 */
