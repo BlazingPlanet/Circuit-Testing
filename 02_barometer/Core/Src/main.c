@@ -59,6 +59,7 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 BMP280_Calib calib; // Structure to hold calibration data
+int32_t t_fine; // Variable to hold the fine temperature value for compensation
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -68,8 +69,16 @@ static void MX_USART2_UART_Init(void);
 static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
 uint8_t BMP280_ReadRegister(uint8_t reg); // Function to read a register from the BMP280 sensor
+
 void BMP280ReadRegisters(uint8_t reg, uint8_t *buffer, uint16_t len); // Function to read multiple registers from the BMP280 sensor
 void BMP280_ReadCalibration(void); // Function to read calibration data from the BMP280 sensor
+
+void BMP280ReadRaw(int32_t *raw_temp, int32_t *raw_press); // Function to read raw temperature and pressure data from the BMP280 sensor
+double BMP280CompensateTemp(int32_t raw_temp); // Function to compensate the raw temperature data using calibration data
+double BMP280CompensatePress(int32_t raw_press); // Function to compensate the raw pressure data using calibration data
+
+void BMP280_WriteRegister(uint8_t reg, uint8_t value);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -124,8 +133,17 @@ int main(void)
   printf("dig_P1 = %u\r\n", calib.dig_P1);
   printf("dig_P9 = %d\r\n", calib.dig_P9);
 
+  BMP280_WriteRegister(0xF4, 0x57); // ← ADD: wake sensor, temp ×2, press ×16, normal mode
+
+  int32_t raw_temp, raw_press;
+
   while (1)
   {
+    BMP280ReadRaw(&raw_temp, &raw_press); // Read raw temperature and pressure data
+    double tempC = BMP280CompensateTemp(raw_temp); // Compensate the raw temperature data
+    double pressPa = BMP280CompensatePress(raw_press); // Compensate the raw pressure data
+    printf("Temperature: %.2f C, Pressure: %.2f Pa\r\n", tempC, pressPa); // Print the compensated temperature and pressure
+    HAL_Delay(1000); // Delay for 1 second
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -312,6 +330,17 @@ uint8_t BMP280_ReadRegister(uint8_t reg)
   return rx[1]; // The sensors answers landed in the second byte   
 }
 
+void BMP280_WriteRegister(uint8_t reg, uint8_t value)
+{
+    uint8_t tx[2];
+    tx[0] = reg & 0x7F;   // address byte, bit 7 cleared = WRITE
+    tx[1] = value;        // the byte to write into that register
+
+    HAL_GPIO_WritePin(BMP_CS_GPIO_Port, BMP_CS_Pin, GPIO_PIN_RESET);  // CS low
+    HAL_SPI_Transmit(&hspi1, tx, 2, HAL_MAX_DELAY);                   // send both bytes
+    HAL_GPIO_WritePin(BMP_CS_GPIO_Port, BMP_CS_Pin, GPIO_PIN_SET);    // CS high
+}
+
 void BMP280ReadRegisters(uint8_t reg, uint8_t *buffer, uint16_t len)
 {
   uint8_t addr = reg | 0x80; // Address byte, bit 7 set = READ
@@ -339,6 +368,49 @@ void BMP280_ReadCalibration(void)
   calib.dig_P7 = (int16_t)((buf[19] << 8) | buf[18]);
   calib.dig_P8 = (int16_t)((buf[21] << 8) | buf[20]);
   calib.dig_P9 = (int16_t)((buf[23] << 8) | buf[22]);
+}
+
+void BMP280ReadRaw(int32_t *raw_temp, int32_t *raw_press)
+{
+  uint8_t buf[6]; // Buffer to hold raw data
+  BMP280ReadRegisters(0xF7, buf, 6); // Read 6 bytes of raw data starting from register 0xF7
+
+  *raw_press = (int32_t)((buf[0] << 12) | (buf[1] << 4) | (buf[2] >> 4)); // Combine bytes to get raw pressure
+  *raw_temp = (int32_t)((buf[3] << 12) | (buf[4] << 4) | (buf[5] >> 4)); // Combine bytes to get raw temperature
+}
+
+double BMP280CompensateTemp(int32_t raw_temp)
+{
+  double var1, var2, T;
+  var1 = (((double)raw_temp) / 16384.0 - ((double)calib.dig_T1) / 1024.0) * ((double)calib.dig_T2);
+  var2 = ((((double)raw_temp)/131072.0 - ((double)calib.dig_T1)/8192.0) * 
+          (((double)raw_temp)/131072.0 - ((double)calib.dig_T1)/8192.0)) * ((double)calib.dig_T3);
+  t_fine = (int32_t)(var1 + var2);
+  T = (var1 + var2) / 5120.0;
+  return T; // Return temperature in degrees Celsius
+}
+
+double BMP280CompensatePress(int32_t raw_press)
+{
+  double var1, var2, p;
+  var1 = ((double)t_fine / 2.0) - 64000.0;
+  var2 = var1 * var1 * ((double)calib.dig_P6) / 32768.0;
+  var2 = var2 + var1 * ((double)calib.dig_P5) * 2.0;
+  var2 = (var2 / 4.0) + (((double)calib.dig_P4) * 65536.0);
+  var1 = (((double)calib.dig_P3) * var1 * var1 / 524288.0 + ((double)calib.dig_P2) * var1) / 524288.0;
+  var1 = (1.0 + var1 / 32768.0) * ((double)calib.dig_P1);
+  
+  if (var1 == 0.0)
+    return 0; // Avoid division by zero
+
+  p = 1048576.0 - (double)raw_press;
+  p = (p - (var2 / 4096.0)) * 6250.0 / var1;
+  var1 = ((double)calib.dig_P9) * p * p / 2147483648.0;
+  var2 = p * ((double)calib.dig_P8) / 32768.0;
+  
+  p = p + (var1 + var2 + ((double)calib.dig_P7)) / 16.0;
+
+  return p; // Return pressure in Pascals
 }
 
 /* USER CODE END 4 */
