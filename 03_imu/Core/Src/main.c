@@ -31,7 +31,11 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define ISM_WHO_AM_I  0x0F
+#define ISM_CTRL1_XL  0x10 // Accelerometer Control: 0DR + full-scale
+#define ISM_CTRL2_G   0x11 // Gyroscope Control: 0DR + full-scale
+#define ISM_OUTX_L_G  0x22 // Gyroscope X-axis output, low byte (data block starts here)
+#define ISM_OUTX_L_A  0x28 // Accelerometer X-axis output, low byte (data block starts here)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -55,6 +59,7 @@ static void MX_USART2_UART_Init(void);
 static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
 uint8_t IMU_ReadRegister(uint8_t reg);
+void IMU_WriteRegister(uint8_t reg, uint8_t value);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -97,8 +102,17 @@ int main(void)
   // CS rests HIGH (deselected). Overrides CubeMX's startup LOW
   HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET);
 
-  uint8_t who_am_i = IMU_ReadRegister(0x0F);
+  uint8_t who_am_i = IMU_ReadRegister(ISM_WHO_AM_I);
   printf("ISM330DHCX IMU WHO_AM_I: 0x%02X (expected: 0x6B)\r\n", who_am_i);
+
+  // Wae accelerometer: 104 Hz 0DR, +-2g
+  IMU_WriteRegister(ISM_CTRL1_XL, 0x40);
+  // Wake gyroscope: 104 Hz 0DR, +-250 dps
+  IMU_WriteRegister(ISM_CTRL2_G, 0x40);
+
+  // Read the control registers back to confirm the wake-up took
+  printf("CTRL1_XL: 0x%02X (expected 0x40)\r\n", IMU_ReadRegister(ISM_CTRL1_XL));
+  printf("CTRL2_G:  0x%02X (expected 0x40)\r\n", IMU_ReadRegister(ISM_CTRL2_G));
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -300,6 +314,17 @@ uint8_t IMU_ReadRegister(uint8_t reg)
   HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET); // deselect
 
   return rx[1]; // The sensors answers landed in the second byte   
+}
+
+void IMU_WriteRegister(uint8_t reg, uint8_t value)
+{
+  uint8_t tx[2];
+  tx[0] = reg & 0x7F; // bit 7 = 0 -> Write
+  tx[1] = value;
+
+  HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_RESET); // select
+  HAL_SPI_Transmit(&hspi1, tx, 2, HAL_MAX_DELAY);
+  HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET); // deselect
 }
 
 /* USER CODE END 4 */
