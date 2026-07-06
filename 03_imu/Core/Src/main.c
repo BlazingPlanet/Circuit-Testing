@@ -60,6 +60,7 @@ static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
 uint8_t IMU_ReadRegister(uint8_t reg);
 void IMU_WriteRegister(uint8_t reg, uint8_t value);
+void IMU_ReadRegisters(uint8_t reg, uint8_t *buffer, uint8_t len);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -105,7 +106,7 @@ int main(void)
   uint8_t who_am_i = IMU_ReadRegister(ISM_WHO_AM_I);
   printf("ISM330DHCX IMU WHO_AM_I: 0x%02X (expected: 0x6B)\r\n", who_am_i);
 
-  // Wae accelerometer: 104 Hz 0DR, +-2g
+  // Wake accelerometer: 104 Hz 0DR, +-2g
   IMU_WriteRegister(ISM_CTRL1_XL, 0x40);
   // Wake gyroscope: 104 Hz 0DR, +-250 dps
   IMU_WriteRegister(ISM_CTRL2_G, 0x40);
@@ -118,8 +119,27 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 
+  uint8_t accel_buf[6];
+  uint8_t gyro_buf[6];
+
   while (1)
   {
+    IMU_ReadRegisters(ISM_OUTX_L_A, accel_buf, 6); // accel X/Y/Z 6 bytes (Low/High)
+    IMU_ReadRegisters(ISM_OUTX_L_G, gyro_buf, 6);  // gyro X/Y/Z 6 bytes (Low/High)
+
+    // Assemble little-endian (high << 8 | low), signed
+    int16_t ax = (int16_t)(accel_buf[1] << 8 | accel_buf[0]);
+    int16_t ay = (int16_t)(accel_buf[3] << 8 | accel_buf[2]);
+    int16_t az = (int16_t)(accel_buf[5] << 8 | accel_buf[4]);
+
+    int16_t gx = (int16_t)(gyro_buf[1] << 8 | gyro_buf[0]);
+    int16_t gy = (int16_t)(gyro_buf[3] << 8 | gyro_buf[2]);
+    int16_t gz = (int16_t)(gyro_buf[5] << 8 | gyro_buf[4]);
+
+    printf("Accel: X=%6d, Y=%6d, Z=%6d | Gyro: X=%6d, Y=%6d, Z=%6d\r\n", ax, ay, az, gx, gy, gz);
+
+    HAL_Delay(500); // 5 prints per second
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -325,6 +345,17 @@ void IMU_WriteRegister(uint8_t reg, uint8_t value)
   HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_RESET); // select
   HAL_SPI_Transmit(&hspi1, tx, 2, HAL_MAX_DELAY);
   HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET); // deselect
+}
+
+void IMU_ReadRegisters(uint8_t reg, uint8_t *buffer, uint8_t len)
+{
+  uint8_t addr = reg | 0x80; // bit 7 = 1 -> Read
+
+  HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_RESET); // select
+  HAL_SPI_Transmit(&hspi1, &addr, 1, HAL_MAX_DELAY); // send address
+  HAL_SPI_Receive(&hspi1, buffer, len, HAL_MAX_DELAY); // read data
+  HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET); // deselect
+
 }
 
 /* USER CODE END 4 */
