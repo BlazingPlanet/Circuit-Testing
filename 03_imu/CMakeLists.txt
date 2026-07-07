@@ -19,7 +19,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Set the project name
-set(CMAKE_PROJECT_NAME 02_barometer)
+set(CMAKE_PROJECT_NAME 03_imu)
 
 # Enable compile command to ease indexing with e.g. clangd
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
@@ -66,3 +66,6 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 
     # Add user defined libraries
 )
+
+# Enable floating-point support in printf/sprintf (for %f)
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE -u _printf_float)

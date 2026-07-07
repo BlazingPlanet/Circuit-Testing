@@ -36,6 +36,9 @@
 #define ISM_CTRL2_G   0x11 // Gyroscope Control: 0DR + full-scale
 #define ISM_OUTX_L_G  0x22 // Gyroscope X-axis output, low byte (data block starts here)
 #define ISM_OUTX_L_A  0x28 // Accelerometer X-axis output, low byte (data block starts here)
+#define ACCEL_SENSE_2G 0.061f // milli g's per count
+#define GYRO_SENSE_250DPS 8.75f // milli dps per count
+#define GRAVITY 9.80665f // m/s^2
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -136,9 +139,17 @@ int main(void)
     int16_t gy = (int16_t)(gyro_buf[3] << 8 | gyro_buf[2]);
     int16_t gz = (int16_t)(gyro_buf[5] << 8 | gyro_buf[4]);
 
-    printf("Accel: X=%6d, Y=%6d, Z=%6d | Gyro: X=%6d, Y=%6d, Z=%6d\r\n", ax, ay, az, gx, gy, gz);
+    float ax_g = ax * ACCEL_SENSE_2G / 1000.0f; // convert to g's
+    float ay_g = ay * ACCEL_SENSE_2G / 1000.0f;
+    float az_g = az * ACCEL_SENSE_2G / 1000.0f;
 
-    HAL_Delay(500); // 5 prints per second
+    float gx_dps = gx * GYRO_SENSE_250DPS / 1000.0f; // convert to degrees per second
+    float gy_dps = gy * GYRO_SENSE_250DPS / 1000.0f;
+    float gz_dps = gz * GYRO_SENSE_250DPS / 1000.0f;
+
+    printf("Accel: X=%6.2f, Y=%6.2f, Z=%6.2f | Gyro: X=%6.2f, Y=%6.2f, Z=%6.2f\r\n", ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps);
+
+    HAL_Delay(200); // 5 prints per second
 
     /* USER CODE END WHILE */
 
