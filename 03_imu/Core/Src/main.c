@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -125,29 +126,34 @@ int main(void)
   uint8_t accel_buf[6];
   uint8_t gyro_buf[6];
 
+  float roll = 0.0f; // fused roll angle (starts at zero) (degrees)
+  const float dt = 0.2f; // seconds per loop (matches HAL_DELAY(200))
+  const float alpha = 0.98f; // gyro weight, accel gets 1-alpha weight
+
+
   while (1)
   {
     IMU_ReadRegisters(ISM_OUTX_L_A, accel_buf, 6); // accel X/Y/Z 6 bytes (Low/High)
     IMU_ReadRegisters(ISM_OUTX_L_G, gyro_buf, 6);  // gyro X/Y/Z 6 bytes (Low/High)
 
     // Assemble little-endian (high << 8 | low), signed
-    int16_t ax = (int16_t)(accel_buf[1] << 8 | accel_buf[0]);
     int16_t ay = (int16_t)(accel_buf[3] << 8 | accel_buf[2]);
     int16_t az = (int16_t)(accel_buf[5] << 8 | accel_buf[4]);
-
     int16_t gx = (int16_t)(gyro_buf[1] << 8 | gyro_buf[0]);
-    int16_t gy = (int16_t)(gyro_buf[3] << 8 | gyro_buf[2]);
-    int16_t gz = (int16_t)(gyro_buf[5] << 8 | gyro_buf[4]);
 
-    float ax_g = ax * ACCEL_SENSE_2G / 1000.0f; // convert to g's
-    float ay_g = ay * ACCEL_SENSE_2G / 1000.0f;
+    // Convert to physical units
+    float ay_g = ay * ACCEL_SENSE_2G / 1000.0f; //convert to g's
     float az_g = az * ACCEL_SENSE_2G / 1000.0f;
-
     float gx_dps = gx * GYRO_SENSE_250DPS / 1000.0f; // convert to degrees per second
-    float gy_dps = gy * GYRO_SENSE_250DPS / 1000.0f;
-    float gz_dps = gz * GYRO_SENSE_250DPS / 1000.0f;
 
-    printf("Accel: X=%6.2f, Y=%6.2f, Z=%6.2f | Gyro: X=%6.2f, Y=%6.2f, Z=%6.2f\r\n", ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps);
+    // Path 1: roll from the accelerometer (absolute, gravity referenced)
+    float roll_accel = atan2f(ay_g, az_g) * 180.0f / 3.14159265f;
+
+    // Complimentary filter:
+    // 98% gyro (smooth short term), 2% accel (long term anchor, kills drift)
+    roll = alpha * (roll + gx_dps * dt) + (1.0f - alpha) * roll_accel;
+
+    printf("Fused roll: %7.2f deg  (accel ref: %7.2f)\r\n", roll, roll_accel);
 
     HAL_Delay(200); // 5 prints per second
 
