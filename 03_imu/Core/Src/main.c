@@ -37,8 +37,8 @@
 #define ISM_CTRL2_G   0x11 // Gyroscope Control: 0DR + full-scale
 #define ISM_OUTX_L_G  0x22 // Gyroscope X-axis output, low byte (data block starts here)
 #define ISM_OUTX_L_A  0x28 // Accelerometer X-axis output, low byte (data block starts here)
-#define ACCEL_SENSE_2G 0.061f // milli g's per count
-#define GYRO_SENSE_250DPS 8.75f // milli dps per count
+#define ACCEL_SENS_2G 0.061f // milli g's per count
+#define GYRO_SENS_250DPS 8.75f // milli dps per count
 #define GRAVITY 9.80665f // m/s^2
 /* USER CODE END PD */
 
@@ -126,7 +126,17 @@ int main(void)
   uint8_t accel_buf[6];
   uint8_t gyro_buf[6];
 
-  float roll = 0.0f; // fused roll angle (starts at zero) (degrees)
+  // Read the initial accelerometer values to get a starting point for roll
+  IMU_ReadRegisters(ISM_OUTX_L_A, accel_buf, 6); // accel X/Y/Z 6 bytes (Low/High)
+  int16_t ay0 = (int16_t)(accel_buf[3] << 8 | accel_buf[2]);
+  int16_t az0 = (int16_t)(accel_buf[5] << 8 | accel_buf[4]);
+
+  // Convert to physical units
+  float ay0_g = ay0 * ACCEL_SENS_2G / 1000.0f; //convert to g's
+  float az0_g = az0 * ACCEL_SENS_2G / 1000.0f;
+
+  float roll = atan2f(ay0_g, az0_g) * 180.0f / 3.14159265f;
+
   const float alpha = 0.98f; // gyro weight, accel gets 1-alpha weight
   uint32_t last_tick = HAL_GetTick();
 
@@ -147,9 +157,9 @@ int main(void)
     int16_t gx = (int16_t)(gyro_buf[1] << 8 | gyro_buf[0]);
 
     // Convert to physical units
-    float ay_g = ay * ACCEL_SENSE_2G / 1000.0f; //convert to g's
-    float az_g = az * ACCEL_SENSE_2G / 1000.0f;
-    float gx_dps = gx * GYRO_SENSE_250DPS / 1000.0f; // convert to degrees per second
+    float ay_g = ay * ACCEL_SENS_2G / 1000.0f; //convert to g's
+    float az_g = az * ACCEL_SENS_2G / 1000.0f;
+    float gx_dps = gx * GYRO_SENS_250DPS / 1000.0f; // convert to degrees per second
 
     // Path 1: roll from the accelerometer (absolute, gravity referenced)
     float roll_accel = atan2f(ay_g, az_g) * 180.0f / 3.14159265f;
