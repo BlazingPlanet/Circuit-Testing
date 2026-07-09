@@ -127,12 +127,17 @@ int main(void)
   uint8_t gyro_buf[6];
 
   float roll = 0.0f; // fused roll angle (starts at zero) (degrees)
-  const float dt = 0.2f; // seconds per loop (matches HAL_DELAY(200))
   const float alpha = 0.98f; // gyro weight, accel gets 1-alpha weight
+  uint32_t last_tick = HAL_GetTick();
 
 
   while (1)
   {
+    // Measure ACTUAL elapsed time since last loop
+    uint32_t now = HAL_GetTick(); 
+    float dt = (now - last_tick) / 1000.0f; // convert to seconds
+    last_tick = now;
+
     IMU_ReadRegisters(ISM_OUTX_L_A, accel_buf, 6); // accel X/Y/Z 6 bytes (Low/High)
     IMU_ReadRegisters(ISM_OUTX_L_G, gyro_buf, 6);  // gyro X/Y/Z 6 bytes (Low/High)
 
@@ -153,7 +158,7 @@ int main(void)
     // 98% gyro (smooth short term), 2% accel (long term anchor, kills drift)
     roll = alpha * (roll + gx_dps * dt) + (1.0f - alpha) * roll_accel;
 
-    printf("Fused roll: %7.2f deg  (accel ref: %7.2f)\r\n", roll, roll_accel);
+    printf("Fused roll: %7.2f deg  (dt: %.4f s)\r\n", roll, dt);
 
     HAL_Delay(200); // 5 prints per second
 
