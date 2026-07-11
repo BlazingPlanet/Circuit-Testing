@@ -27,7 +27,9 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef struct {
+  float w, x, y, z;
+} Quaternion;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -65,6 +67,11 @@ static void MX_SPI1_Init(void);
 uint8_t IMU_ReadRegister(uint8_t reg);
 void IMU_WriteRegister(uint8_t reg, uint8_t value);
 void IMU_ReadRegisters(uint8_t reg, uint8_t *buffer, uint8_t len);
+
+Quaternion quat_multiply(Quaternion a, Quaternion b);
+Quaternion quat_conjugate(Quaternion q);
+Quaternion quat_normalize(Quaternion q);
+void quat_print(const char *label, Quaternion q);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -118,6 +125,33 @@ int main(void)
   // Read the control registers back to confirm the wake-up took
   printf("CTRL1_XL: 0x%02X (expected 0x40)\r\n", IMU_ReadRegister(ISM_CTRL1_XL));
   printf("CTRL2_G:  0x%02X (expected 0x40)\r\n", IMU_ReadRegister(ISM_CTRL2_G));
+
+  //Primitive tests for quaternion functions
+  printf("\r\n-- Quaternion primitive tests --\r\n");
+
+  Quaternion identity = {1.0f, 0.0f, 0.0f, 0.0f};
+  Quaternion q90z = {0.7071068f, 0.0f, 0.0f, 0.7071068f}; // 90 deg rotation about Z
+  Quaternion q60x = {0.8660254f, 0.5f, 0.0f, 0.0f}; // 60 deg rotation about X
+
+  // Test 1: anything times identity is unchnaged
+  quat_print("T1 got: ", quat_multiply(q90z, identity));
+  printf("T1 expected: w=0.7071  x=0.0000  y=0.0000  z=0.7071\r\n");
+
+  // Test 2: 90 about Z twice is 180 about Z
+  quat_print("T2 got: ", quat_multiply(q90z, q90z));
+  printf("T2 expected: w=0.0000  x=0.0000  y=0.0000  z=1.0000\r\n");
+
+  // Test 3: Rotate then unrotate is identity
+  quat_print("T3 got: ", quat_multiply(q60x, quat_conjugate(q60x)));
+  printf("T3 expected: w=1.0000  x=0.0000  y=0.0000  z=0.0000\r\n");
+
+  // Test 4: normalize undoes scaling
+  Quaternion scaled = {3.0f*0.7071068f, 0.0f, 0.0f, 3.0f*0.7071068f};
+  quat_print("T4 got: ", quat_normalize(scaled));
+  printf("T4 expected: w=0.7071  x=0.0000  y=0.0000  z=0.7071\r\n");
+
+  printf("\r\n-- End Quaternion primitive tests --\r\n\r\n");
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -168,7 +202,8 @@ int main(void)
     // 98% gyro (smooth short term), 2% accel (long term anchor, kills drift)
     roll = alpha * (roll + gx_dps * dt) + (1.0f - alpha) * roll_accel;
 
-    printf("Fused roll: %7.2f deg  (dt: %.4f s)\r\n", roll, dt);
+    //Commented out printf temporarily to stop flooding the serial output. 
+    // printf("Fused roll: %7.2f deg  (dt: %.4f s)\r\n", roll, dt);
 
     HAL_Delay(200); // 5 prints per second
 
@@ -388,6 +423,43 @@ void IMU_ReadRegisters(uint8_t reg, uint8_t *buffer, uint8_t len)
   HAL_SPI_Receive(&hspi1, buffer, len, HAL_MAX_DELAY); // read data
   HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET); // deselect
 
+}
+
+// Quaternion Functions
+// Compose two rotations: applies b first, then a.
+// Order matters -- quaternion multiplication is not commutative.
+Quaternion quat_multiply(Quaternion a, Quaternion b)
+{
+  Quaternion r;
+  r.w = a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z;
+  r.x = a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y;
+  r.y = a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x;
+  r.z = a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w;
+  return r;
+}
+
+//Reverse the rotation: same axis, opposite direction.
+Quaternion quat_conjugate(Quaternion q)
+{
+  Quaternion r = {q.w, -q.x, -q.y, -q.z};
+  return r;
+}
+
+// Resscale to unit length. Re-imposes w^2+x^2+y^2+z^2=1.
+Quaternion quat_normalize(Quaternion q)
+{
+  float n = sqrtf(q.w*q.w + q.x*q.x + q.y*q.y + q.z*q.z);
+  if (n < 1e-6f) {
+    Quaternion id = {1.0f, 0.0f, 0.0f, 0.0f};
+    return id; // Return identity quaternion if input is too small
+  }
+  Quaternion r = {q.w/n, q.x/n, q.y/n, q.z/n};
+  return r;
+}
+
+void quat_print(const char *label, Quaternion q)
+{
+  printf("%-12s w=%7.4f x=%7.4f y=%7.4f z=%7.4f\r\n", label, q.w, q.x, q.y, q.z); 
 }
 
 /* USER CODE END 4 */
