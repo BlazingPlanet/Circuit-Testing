@@ -72,6 +72,8 @@ Quaternion quat_multiply(Quaternion a, Quaternion b);
 Quaternion quat_conjugate(Quaternion q);
 Quaternion quat_normalize(Quaternion q);
 void quat_print(const char *label, Quaternion q);
+
+Quaternion quat_integrate(Quaternion q, float wx, float wy, float wz, float dt); // integrate angular velocity into quaternion
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -156,56 +158,33 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-
-  uint8_t accel_buf[6];
   uint8_t gyro_buf[6];
 
-  // Read the initial accelerometer values to get a starting point for roll
-  IMU_ReadRegisters(ISM_OUTX_L_A, accel_buf, 6); // accel X/Y/Z 6 bytes (Low/High)
-  int16_t ay0 = (int16_t)(accel_buf[3] << 8 | accel_buf[2]);
-  int16_t az0 = (int16_t)(accel_buf[5] << 8 | accel_buf[4]);
-
-  // Convert to physical units
-  float ay0_g = ay0 * ACCEL_SENS_2G / 1000.0f; //convert to g's
-  float az0_g = az0 * ACCEL_SENS_2G / 1000.0f;
-
-  float roll = atan2f(ay0_g, az0_g) * 180.0f / 3.14159265f;
-
-  const float alpha = 0.98f; // gyro weight, accel gets 1-alpha weight
+  Quaternion q = {1.0f, 0.0f, 0.0f, 0.0f}; // start at identity (no rotation)
+  const float DEG2RAD = 3.14159265358979323846f / 180.0f;
   uint32_t last_tick = HAL_GetTick();
-
 
   while (1)
   {
-    // Measure ACTUAL elapsed time since last loop
-    uint32_t now = HAL_GetTick(); 
-    float dt = (now - last_tick) / 1000.0f; // convert to seconds
+    uint32_t now = HAL_GetTick();
+    float dt = (now - last_tick) / 1000.0f; // convert ms to seconds
     last_tick = now;
 
-    IMU_ReadRegisters(ISM_OUTX_L_A, accel_buf, 6); // accel X/Y/Z 6 bytes (Low/High)
-    IMU_ReadRegisters(ISM_OUTX_L_G, gyro_buf, 6);  // gyro X/Y/Z 6 bytes (Low/High)
-
-    // Assemble little-endian (high << 8 | low), signed
-    int16_t ay = (int16_t)(accel_buf[3] << 8 | accel_buf[2]);
-    int16_t az = (int16_t)(accel_buf[5] << 8 | accel_buf[4]);
+    IMU_ReadRegisters(ISM_OUTX_L_G, gyro_buf, 6);
     int16_t gx = (int16_t)(gyro_buf[1] << 8 | gyro_buf[0]);
+    int16_t gy = (int16_t)(gyro_buf[3] << 8 | gyro_buf[2]);
+    int16_t gz = (int16_t)(gyro_buf[5] << 8 | gyro_buf[4]);
 
-    // Convert to physical units
-    float ay_g = ay * ACCEL_SENS_2G / 1000.0f; //convert to g's
-    float az_g = az * ACCEL_SENS_2G / 1000.0f;
-    float gx_dps = gx * GYRO_SENS_250DPS / 1000.0f; // convert to degrees per second
+    // raw -> dps -> rad/s
+    float wx = gx * GYRO_SENS_250DPS / 1000.0f * DEG2RAD;
+    float wy = gy * GYRO_SENS_250DPS / 1000.0f * DEG2RAD;
+    float wz = gz * GYRO_SENS_250DPS / 1000.0f * DEG2RAD;
 
-    // Path 1: roll from the accelerometer (absolute, gravity referenced)
-    float roll_accel = atan2f(ay_g, az_g) * 180.0f / 3.14159265f;
+    q = quat_integrate(q, wx, wy, wz, dt);
 
-    // Complimentary filter:
-    // 98% gyro (smooth short term), 2% accel (long term anchor, kills drift)
-    roll = alpha * (roll + gx_dps * dt) + (1.0f - alpha) * roll_accel;
+    quat_print("attitude: ", q);
 
-    //Commented out printf temporarily to stop flooding the serial output. 
-    // printf("Fused roll: %7.2f deg  (dt: %.4f s)\r\n", roll, dt);
-
-    HAL_Delay(200); // 5 prints per second
+    HAL_Delay(200); // 200 ms delay
 
     /* USER CODE END WHILE */
 
@@ -460,6 +439,23 @@ Quaternion quat_normalize(Quaternion q)
 void quat_print(const char *label, Quaternion q)
 {
   printf("%-12s w=%7.4f x=%7.4f y=%7.4f z=%7.4f\r\n", label, q.w, q.x, q.y, q.z); 
+}
+
+//Integrate gyro rates (rad/s) into the orientation quaternion over dt seconds.
+// q_new = q + (1/2)(q (x) (o,wx,wy,wz)) * dt, then normalize
+Quaternion quat_integrate(Quaternion q, float wx, float wy, float wz, float dt)
+{
+  Quaternion omega = {0.0f, wx, wy, wz};    // gyro as a pure quaternion
+  Quaternion qdot = quat_multiply(q, omega); // quaternion (x) (0, w)
+
+  // scale by 1/2, then by dt, and add to q
+  Quaternion q_new;
+  q_new.w = q.w + 0.5f * qdot.w * dt;
+  q_new.x = q.x + 0.5f * qdot.x * dt;
+  q_new.y = q.y + 0.5f * qdot.y * dt;
+  q_new.z = q.z + 0.5f * qdot.z * dt;
+
+  return quat_normalize(q_new); // normalize to unit length
 }
 
 /* USER CODE END 4 */
