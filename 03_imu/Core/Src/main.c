@@ -74,6 +74,8 @@ Quaternion quat_normalize(Quaternion q);
 void quat_print(const char *label, Quaternion q);
 
 Quaternion quat_integrate(Quaternion q, float wx, float wy, float wz, float dt); // integrate angular velocity into quaternion
+
+void quat_rotate_vector(Quaternion q, float vx, float vy, float vz, float *rx, float *ry, float *rz);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -158,10 +160,12 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  uint8_t accel_buf[6];
   uint8_t gyro_buf[6];
 
   Quaternion q = {1.0f, 0.0f, 0.0f, 0.0f}; // start at identity (no rotation)
   const float DEG2RAD = 3.14159265358979323846f / 180.0f;
+  const float Kp = 2.0f; // proportional gain for Mahoney filter (tubing knob)
   uint32_t last_tick = HAL_GetTick();
 
   while (1)
@@ -171,6 +175,11 @@ int main(void)
     last_tick = now;
 
     IMU_ReadRegisters(ISM_OUTX_L_G, gyro_buf, 6);
+    IMU_ReadRegisters(ISM_OUTX_L_A, accel_buf, 6);
+
+    int16_t ax = (int16_t)(accel_buf[1] << 8 | accel_buf[0]);
+    int16_t ay = (int16_t)(accel_buf[3] << 8 | accel_buf[2]);
+    int16_t az = (int16_t)(accel_buf[5] << 8 | accel_buf[4]);
     int16_t gx = (int16_t)(gyro_buf[1] << 8 | gyro_buf[0]);
     int16_t gy = (int16_t)(gyro_buf[3] << 8 | gyro_buf[2]);
     int16_t gz = (int16_t)(gyro_buf[5] << 8 | gyro_buf[4]);
@@ -179,6 +188,28 @@ int main(void)
     float wx = gx * GYRO_SENS_250DPS / 1000.0f * DEG2RAD;
     float wy = gy * GYRO_SENS_250DPS / 1000.0f * DEG2RAD;
     float wz = gz * GYRO_SENS_250DPS / 1000.0f * DEG2RAD;
+
+    // --- Step 2/3: accel correction ---
+    // normalize the accelermoeter vector (we only care about DIRECTION)
+    float an = sqrtf((float)ax*ax + (float)ay*ay + (float)az*az);
+    if (an > 1e-3f) {
+      float max = ax / an, may = ay / an, maz = az / an; // measured gravity direction
+
+      // predicted gravity in body frame = q* applied to world down (0,0,1)
+      float px, py, pz;
+      quat_rotate_vector(quat_conjugate(q), 0.0f, 0.0f, 1.0f, &px, &py, &pz);
+
+      // error = measured x predicted (cross product)
+      float ex = may*pz - maz*py;
+      float ey = maz*px - max*pz;
+      float ez = max*py - may*px;
+
+      // --- Step 4: feed error back into the gyro rate ---
+      wx += Kp * ex;
+      wy += Kp * ey;
+      wz += Kp * ez;
+    }
+
 
     q = quat_integrate(q, wx, wy, wz, dt);
 
@@ -456,6 +487,19 @@ Quaternion quat_integrate(Quaternion q, float wx, float wy, float wz, float dt)
   q_new.z = q.z + 0.5f * qdot.z * dt;
 
   return quat_normalize(q_new); // normalize to unit length
+}
+
+// Rotate vector v by quaternion q: v' = q (x) (0,v) (x) q*
+// Pass q for body -> world, or pass q* for world -> body
+void quat_rotate_vector(Quaternion q, float vx, float vy, float vz, float *rx, float *ry, float *rz)
+{
+  Quaternion v = {0.0f, vx, vy, vz};
+  Quaternion qc = quat_conjugate(q);
+  Quaternion tmp = quat_multiply(q, v);
+  Quaternion res = quat_multiply(tmp, qc);
+  *rx = res.x;
+  *ry = res.y;
+  *rz = res.z;
 }
 
 /* USER CODE END 4 */
