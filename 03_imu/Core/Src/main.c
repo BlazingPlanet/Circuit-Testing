@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "stm32f4xx_hal_conf.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -164,8 +165,10 @@ int main(void)
   uint8_t gyro_buf[6];
 
   Quaternion q = {1.0f, 0.0f, 0.0f, 0.0f}; // start at identity (no rotation)
+  float bx = .0f, by = 0.0f, bz = 0.0f; // estimated gyro bias (rad/s)
   const float DEG2RAD = 3.14159265358979323846f / 180.0f;
   const float Kp = 2.0f; // proportional gain for Mahoney filter (tubing knob)
+  const float Ki = 0.01f; // integral gain
   uint32_t last_tick = HAL_GetTick();
 
   while (1)
@@ -204,16 +207,35 @@ int main(void)
       float ey = maz*px - max*pz;
       float ez = max*py - may*px;
 
+      // Accumulate the error into bias
+      bx += Ki * ex * dt;
+      by += Ki * ey * dt;
+      bz += Ki * ez * dt;
+
+      // anti-windup: real gyro bias is tiny (~a few dps). Cap it.
+      const float BIAS_MAX = 0.05f;  // rad/s, ~3 dps
+      if (bx > BIAS_MAX) bx = BIAS_MAX;
+      if (bx < -BIAS_MAX) bx = -BIAS_MAX;
+      if (by > BIAS_MAX) by = BIAS_MAX;
+      if (by < -BIAS_MAX) by = -BIAS_MAX;
+      if (bz > BIAS_MAX) bz = BIAS_MAX;
+      if (bz < -BIAS_MAX) bz = -BIAS_MAX;
+
       // --- Step 4: feed error back into the gyro rate ---
       wx += Kp * ex;
       wy += Kp * ey;
       wz += Kp * ez;
     }
 
+    wx -= bx;
+    wy -= by;
+    wz -= bz;
 
     q = quat_integrate(q, wx, wy, wz, dt);
 
-    quat_print("attitude: ", q);
+    //quat_print("attitude: ", q);
+    printf("q: %5.2f %5.2f %5.2f %5.2f  |  bias: %6.3f %6.3f %6.3f\r\n",
+      q.w, q.x, q.y, q.z, bx, by, bz);
 
     HAL_Delay(200); // 200 ms delay
 
