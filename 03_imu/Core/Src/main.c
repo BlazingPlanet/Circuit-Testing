@@ -165,10 +165,14 @@ int main(void)
   uint8_t gyro_buf[6];
 
   Quaternion q = {1.0f, 0.0f, 0.0f, 0.0f}; // start at identity (no rotation)
-  float bx = .0f, by = 0.0f, bz = 0.0f; // estimated gyro bias (rad/s)
+  float bx = 0.0f, by = 0.0f, bz = 0.0f; // estimated gyro bias (rad/s)
   const float DEG2RAD = 3.14159265358979323846f / 180.0f;
+
   const float Kp = 2.0f; // proportional gain for Mahoney filter (tubing knob)
   const float Ki = 0.01f; // integral gain
+  const float TRUST_BAND = 0.10f;  // full trust within +/- this many g of 1.0
+  const float TRUST_ZERO = 0.30f;  // zero trust beyond this many g from 1.0
+
   uint32_t last_tick = HAL_GetTick();
 
   while (1)
@@ -195,6 +199,20 @@ int main(void)
     // --- Step 2/3: accel correction ---
     // normalize the accelermoeter vector (we only care about DIRECTION)
     float an = sqrtf((float)ax*ax + (float)ay*ay + (float)az*az);
+    float an_g = an * ACCEL_SENS_2G / 1000.0f;  // raw counts -> g
+
+    float g_err = fabsf(an_g - 1.0f); //how far from pure gravity?
+
+    // Trust factor
+    float trust;
+    if (g_err <= TRUST_BAND) {
+      trust = 1.0f;
+    } else if (g_err >= TRUST_ZERO) {
+      trust = 0.0f;
+    } else {
+      trust = 1.0f - (g_err - TRUST_BAND) / (TRUST_ZERO - TRUST_BAND);
+    }
+
     if (an > 1e-3f) {
       float max = ax / an, may = ay / an, maz = az / an; // measured gravity direction
 
@@ -208,9 +226,9 @@ int main(void)
       float ez = max*py - may*px;
 
       // Accumulate the error into bias
-      bx += Ki * ex * dt;
-      by += Ki * ey * dt;
-      bz += Ki * ez * dt;
+      bx += Ki * trust * ex * dt;
+      by += Ki * trust * ey * dt;
+      bz += Ki * trust * ez * dt;
 
       // anti-windup: real gyro bias is tiny (~a few dps). Cap it.
       const float BIAS_MAX = 0.05f;  // rad/s, ~3 dps
@@ -222,9 +240,9 @@ int main(void)
       if (bz < -BIAS_MAX) bz = -BIAS_MAX;
 
       // --- Step 4: feed error back into the gyro rate ---
-      wx += Kp * ex;
-      wy += Kp * ey;
-      wz += Kp * ez;
+      wx += Kp * trust * ex;
+      wy += Kp * trust * ey;
+      wz += Kp * trust * ez;
     }
 
     wx -= bx;
@@ -233,9 +251,9 @@ int main(void)
 
     q = quat_integrate(q, wx, wy, wz, dt);
 
-    //quat_print("attitude: ", q);
-    printf("q: %5.2f %5.2f %5.2f %5.2f  |  bias: %6.3f %6.3f %6.3f\r\n",
-      q.w, q.x, q.y, q.z, bx, by, bz);
+    //quat_print
+    printf("q: %5.2f %5.2f %5.2f %5.2f | mag: %4.2fg | trust: %4.2f\r\n",
+           q.w, q.x, q.y, q.z, an_g, trust);
 
     HAL_Delay(200); // 200 ms delay
 
