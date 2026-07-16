@@ -77,6 +77,8 @@ void quat_print(const char *label, Quaternion q);
 Quaternion quat_integrate(Quaternion q, float wx, float wy, float wz, float dt); // integrate angular velocity into quaternion
 
 void quat_rotate_vector(Quaternion q, float vx, float vy, float vz, float *rx, float *ry, float *rz);
+
+void quat_to_euler(Quaternion q, float *roll, float *pitch, float *yaw);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -251,9 +253,11 @@ int main(void)
 
     q = quat_integrate(q, wx, wy, wz, dt);
 
-    //quat_print
-    printf("q: %5.2f %5.2f %5.2f %5.2f | mag: %4.2fg | trust: %4.2f\r\n",
-           q.w, q.x, q.y, q.z, an_g, trust);
+    // print out the Euler values for us to read
+    float roll, pitch, yaw;
+    quat_to_euler(q, &roll, &pitch, &yaw);
+    printf("R:%7.2f P:%7.2f Y:%7.2f | mag:%4.2fg trust:%4.2f\r\n",
+           roll, pitch, yaw, an_g, trust);
 
     HAL_Delay(200); // 200 ms delay
 
@@ -540,6 +544,31 @@ void quat_rotate_vector(Quaternion q, float vx, float vy, float vz, float *rx, f
   *rx = res.x;
   *ry = res.y;
   *rz = res.z;
+}
+
+
+// Convert quaternion to roll/pitch/yaw in degrees (ZYX convention)
+// FOR DISPLAY ONLY -- the quaternion remains the authoritative state
+// Degenerates near pitch = +/- 90 deg (singularity point in OUTPUT, not the real estimate)
+void quat_to_euler(Quaternion q, float *roll, float *pitch, float *yaw)
+{
+  const float RAD2DEG = 180.0f / 3.14159265f;
+
+  // roll (rotation about X)
+  float sinr_cosp = 2.0f * (q.w*q.x + q.y*q.z);
+  float cosr_cosp = 1.0f - 2.0f * (q.x*q.x + q.y*q.y);
+  *roll = atan2f(sinr_cosp, cosr_cosp) * RAD2DEG;
+
+  // pitch (rotation about Y)
+  float sinp = 2.0f * (q.w*q.y - q.z*q.x);
+  if (sinp > 1.0f) sinp = 1.0f;    // clamp -- guards asinf against
+  if (sinp < -1.0f) sinp = -1.0f;  // domain error from float rounding
+  *pitch = asinf(sinp) * RAD2DEG;
+
+  // yaw (rotation about Z)
+  float siny_cosp = 2.0f * (q.w*q.z + q.x*q.y);
+  float cosy_cosp = 1.0f - 2.0f * (q.y*q.y + q.z*q.z);
+  *yaw = atan2f(siny_cosp, cosy_cosp) * RAD2DEG;
 }
 
 /* USER CODE END 4 */
