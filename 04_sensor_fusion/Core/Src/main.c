@@ -79,6 +79,10 @@ Quaternion quat_integrate(Quaternion q, float wx, float wy, float wz, float dt);
 void quat_rotate_vector(Quaternion q, float vx, float vy, float vz, float *rx, float *ry, float *rz);
 
 void quat_to_euler(Quaternion q, float *roll, float *pitch, float *yaw);
+
+// BMP 280 Functions
+uint8_t BMP280_ReadRegister(uint8_t reg); // Function to read a register from the BMP280 sensor
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -125,6 +129,9 @@ int main(void)
 
   uint8_t who_am_i = IMU_ReadRegister(ISM_WHO_AM_I);
   printf("ISM330DHCX IMU WHO_AM_I: 0x%02X (expected: 0x6B)\r\n", who_am_i);
+
+  uint8_t BMP280_ID = BMP280_ReadRegister(0xD0); // Read the chip ID register
+  printf("BMP280 Chip ID: 0x%02X (expected: 0x58)\r\n", BMP280_ID); // Print the chip ID to UART
 
   // Wake accelerometer: 104 Hz 0DR, +-2g
   IMU_WriteRegister(ISM_CTRL1_XL, 0x40);
@@ -548,7 +555,6 @@ void quat_rotate_vector(Quaternion q, float vx, float vy, float vz, float *rx, f
   *rz = res.z;
 }
 
-
 // Convert quaternion to roll/pitch/yaw in degrees (ZYX convention)
 // FOR DISPLAY ONLY -- the quaternion remains the authoritative state
 // Degenerates near pitch = +/- 90 deg (singularity point in OUTPUT, not the real estimate)
@@ -571,6 +577,23 @@ void quat_to_euler(Quaternion q, float *roll, float *pitch, float *yaw)
   float siny_cosp = 2.0f * (q.w*q.z + q.x*q.y);
   float cosy_cosp = 1.0f - 2.0f * (q.y*q.y + q.z*q.z);
   *yaw = atan2f(siny_cosp, cosy_cosp) * RAD2DEG;
+}
+
+// BMP 280 Functions
+
+uint8_t BMP280_ReadRegister(uint8_t reg)
+{
+  uint8_t tx[2];
+  uint8_t rx[2];
+
+  tx[0] = reg | 0x80; // Address byte, bit 7 set = READ
+  tx[1] = 0x00; // Dummy byte to clock the answer back
+
+  HAL_GPIO_WritePin(BMP_CS_GPIO_Port, BMP_CS_Pin,  GPIO_PIN_RESET); // CS Low: Start communication
+  HAL_SPI_TransmitReceive(&hspi1, tx, rx, 2, HAL_MAX_DELAY); // exchange 2 bytes
+  HAL_GPIO_WritePin(BMP_CS_GPIO_Port, BMP_CS_Pin, GPIO_PIN_SET); // CS High: End communication
+
+  return rx[1]; // The sensors answers landed in the second byte   
 }
 
 /* USER CODE END 4 */
