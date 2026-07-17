@@ -18,7 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "stm32f4xx_hal_conf.h"
+#include "stm32f4xx_hal_gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -120,6 +120,8 @@ int main(void)
   /* USER CODE BEGIN 2 */
   // CS rests HIGH (deselected). Overrides CubeMX's startup LOW
   HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(BMP_CS_GPIO_Port, BMP_CS_Pin, GPIO_PIN_SET);
+  HAL_Delay(10);
 
   uint8_t who_am_i = IMU_ReadRegister(ISM_WHO_AM_I);
   printf("ISM330DHCX IMU WHO_AM_I: 0x%02X (expected: 0x6B)\r\n", who_am_i);
@@ -141,21 +143,21 @@ int main(void)
   Quaternion q60x = {0.8660254f, 0.5f, 0.0f, 0.0f}; // 60 deg rotation about X
 
   // Test 1: anything times identity is unchnaged
-  quat_print("T1 got: ", quat_multiply(q90z, identity));
-  printf("T1 expected: w=0.7071  x=0.0000  y=0.0000  z=0.7071\r\n");
+  quat_print("T1 got:", quat_multiply(q90z, identity));
+  printf("T1 expected: w= 0.7071 x= 0.0000 y= 0.0000 z= 0.7071\r\n");
 
   // Test 2: 90 about Z twice is 180 about Z
-  quat_print("T2 got: ", quat_multiply(q90z, q90z));
-  printf("T2 expected: w=0.0000  x=0.0000  y=0.0000  z=1.0000\r\n");
+  quat_print("T2 got:", quat_multiply(q90z, q90z));
+  printf("T2 expected: w= 0.0000 x= 0.0000 y= 0.0000 z= 1.0000\r\n");
 
   // Test 3: Rotate then unrotate is identity
-  quat_print("T3 got: ", quat_multiply(q60x, quat_conjugate(q60x)));
-  printf("T3 expected: w=1.0000  x=0.0000  y=0.0000  z=0.0000\r\n");
+  quat_print("T3 got:", quat_multiply(q60x, quat_conjugate(q60x)));
+  printf("T3 expected: w= 1.0000 x= 0.0000 y= 0.0000 z= 0.0000\r\n");
 
   // Test 4: normalize undoes scaling
   Quaternion scaled = {3.0f*0.7071068f, 0.0f, 0.0f, 3.0f*0.7071068f};
-  quat_print("T4 got: ", quat_normalize(scaled));
-  printf("T4 expected: w=0.7071  x=0.0000  y=0.0000  z=0.7071\r\n");
+  quat_print("T4 got:", quat_normalize(scaled));
+  printf("T4 expected: w= 0.7071 x= 0.0000 y= 0.0000 z= 0.7071\r\n");
 
   printf("\r\n-- End Quaternion primitive tests --\r\n\r\n");
 
@@ -405,10 +407,10 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(BMP_CS_GPIO_Port, BMP_CS_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(BMP_CS_GPIO_Port, BMP_CS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
