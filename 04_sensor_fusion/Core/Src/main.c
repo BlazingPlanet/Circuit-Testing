@@ -18,10 +18,11 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "stm32f4xx_hal_gpio.h"
+#include "stm32f4xx_hal_tim.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdint.h>
 #include <stdio.h>
 #include <math.h>
 /* USER CODE END Includes */
@@ -53,10 +54,12 @@ typedef struct {
 /* Private variables ---------------------------------------------------------*/
 SPI_HandleTypeDef hspi1;
 
+TIM_HandleTypeDef htim2;
+
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-
+volatile uint8_t tick_ready = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -64,7 +67,10 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
+
+// IMU & Orientation Functions
 uint8_t IMU_ReadRegister(uint8_t reg);
 void IMU_WriteRegister(uint8_t reg, uint8_t value);
 void IMU_ReadRegisters(uint8_t reg, uint8_t *buffer, uint8_t len);
@@ -121,6 +127,7 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   MX_SPI1_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
   // CS rests HIGH (deselected). Overrides CubeMX's startup LOW
   HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET);
@@ -168,6 +175,8 @@ int main(void)
 
   printf("\r\n-- End Quaternion primitive tests --\r\n\r\n");
 
+  HAL_TIM_Base_Start_IT(&htim2);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -185,90 +194,97 @@ int main(void)
   const float TRUST_ZERO = 0.30f;  // zero trust beyond this many g from 1.0
 
   uint32_t last_tick = HAL_GetTick();
+  uint32_t pass_count = 0;
 
   while (1)
   {
-    uint32_t now = HAL_GetTick();
-    float dt = (now - last_tick) / 1000.0f; // convert ms to seconds
-    last_tick = now;
+    if (tick_ready) {
+      tick_ready = 0;
 
-    IMU_ReadRegisters(ISM_OUTX_L_G, gyro_buf, 6);
-    IMU_ReadRegisters(ISM_OUTX_L_A, accel_buf, 6);
+      uint32_t now = HAL_GetTick();
+      float dt = (now - last_tick) / 1000.0f; // convert ms to seconds
+      last_tick = now;
 
-    int16_t ax = (int16_t)(accel_buf[1] << 8 | accel_buf[0]);
-    int16_t ay = (int16_t)(accel_buf[3] << 8 | accel_buf[2]);
-    int16_t az = (int16_t)(accel_buf[5] << 8 | accel_buf[4]);
-    int16_t gx = (int16_t)(gyro_buf[1] << 8 | gyro_buf[0]);
-    int16_t gy = (int16_t)(gyro_buf[3] << 8 | gyro_buf[2]);
-    int16_t gz = (int16_t)(gyro_buf[5] << 8 | gyro_buf[4]);
+      IMU_ReadRegisters(ISM_OUTX_L_G, gyro_buf, 6);
+      IMU_ReadRegisters(ISM_OUTX_L_A, accel_buf, 6);
 
-    // raw -> dps -> rad/s
-    float wx = gx * GYRO_SENS_250DPS / 1000.0f * DEG2RAD;
-    float wy = gy * GYRO_SENS_250DPS / 1000.0f * DEG2RAD;
-    float wz = gz * GYRO_SENS_250DPS / 1000.0f * DEG2RAD;
+      int16_t ax = (int16_t)(accel_buf[1] << 8 | accel_buf[0]);
+      int16_t ay = (int16_t)(accel_buf[3] << 8 | accel_buf[2]);
+      int16_t az = (int16_t)(accel_buf[5] << 8 | accel_buf[4]);
+      int16_t gx = (int16_t)(gyro_buf[1] << 8 | gyro_buf[0]);
+      int16_t gy = (int16_t)(gyro_buf[3] << 8 | gyro_buf[2]);
+      int16_t gz = (int16_t)(gyro_buf[5] << 8 | gyro_buf[4]);
 
-    // --- Step 2/3: accel correction ---
-    // normalize the accelermoeter vector (we only care about DIRECTION)
-    float an = sqrtf((float)ax*ax + (float)ay*ay + (float)az*az);
-    float an_g = an * ACCEL_SENS_2G / 1000.0f;  // raw counts -> g
+      // raw -> dps -> rad/s
+      float wx = gx * GYRO_SENS_250DPS / 1000.0f * DEG2RAD;
+      float wy = gy * GYRO_SENS_250DPS / 1000.0f * DEG2RAD;
+      float wz = gz * GYRO_SENS_250DPS / 1000.0f * DEG2RAD;
 
-    float g_err = fabsf(an_g - 1.0f); //how far from pure gravity?
+      // --- Step 2/3: accel correction ---
+      // normalize the accelermoeter vector (we only care about DIRECTION)
+      float an = sqrtf((float)ax*ax + (float)ay*ay + (float)az*az);
+      float an_g = an * ACCEL_SENS_2G / 1000.0f;  // raw counts -> g
 
-    // Trust factor
-    float trust;
-    if (g_err <= TRUST_BAND) {
-      trust = 1.0f;
-    } else if (g_err >= TRUST_ZERO) {
-      trust = 0.0f;
-    } else {
-      trust = 1.0f - (g_err - TRUST_BAND) / (TRUST_ZERO - TRUST_BAND);
+      float g_err = fabsf(an_g - 1.0f); //how far from pure gravity?
+
+      // Trust factor
+      float trust;
+      if (g_err <= TRUST_BAND) {
+        trust = 1.0f;
+      } else if (g_err >= TRUST_ZERO) {
+        trust = 0.0f;
+      } else {
+        trust = 1.0f - (g_err - TRUST_BAND) / (TRUST_ZERO - TRUST_BAND);
+      }
+
+      if (an > 1e-3f) {
+        float max = ax / an, may = ay / an, maz = az / an; // measured gravity direction
+
+        // predicted gravity in body frame = q* applied to world down (0,0,1)
+        float px, py, pz;
+        quat_rotate_vector(quat_conjugate(q), 0.0f, 0.0f, 1.0f, &px, &py, &pz);
+
+        // error = measured x predicted (cross product)
+        float ex = may*pz - maz*py;
+        float ey = maz*px - max*pz;
+        float ez = max*py - may*px;
+
+        // Accumulate the error into bias
+        bx += Ki * trust * ex * dt;
+        by += Ki * trust * ey * dt;
+        bz += Ki * trust * ez * dt;
+
+        // anti-windup: real gyro bias is tiny (~a few dps). Cap it.
+        const float BIAS_MAX = 0.05f;  // rad/s, ~3 dps
+        if (bx > BIAS_MAX) bx = BIAS_MAX;
+        if (bx < -BIAS_MAX) bx = -BIAS_MAX;
+        if (by > BIAS_MAX) by = BIAS_MAX;
+        if (by < -BIAS_MAX) by = -BIAS_MAX;
+        if (bz > BIAS_MAX) bz = BIAS_MAX;
+        if (bz < -BIAS_MAX) bz = -BIAS_MAX;
+
+        // --- Step 4: feed error back into the gyro rate ---
+        wx += Kp * trust * ex;
+        wy += Kp * trust * ey;
+        wz += Kp * trust * ez;
+      }
+
+      wx -= bx;
+      wy -= by;
+      wz -= bz;
+
+      q = quat_integrate(q, wx, wy, wz, dt);
+
+      // print out the Euler values for us to read
+      float roll, pitch, yaw;
+      quat_to_euler(q, &roll, &pitch, &yaw);
+      
+      pass_count++;
+      if (pass_count % 40 == 0) {    // 200 Hz / 40 = ~5 lines per second
+        printf("R:%7.2f P:%7.2f Y:%7.2f | mag:%4.2fg trust:%4.2f dt:%.4f\r\n",
+          roll, pitch, yaw, an_g, trust, dt);
+      }
     }
-
-    if (an > 1e-3f) {
-      float max = ax / an, may = ay / an, maz = az / an; // measured gravity direction
-
-      // predicted gravity in body frame = q* applied to world down (0,0,1)
-      float px, py, pz;
-      quat_rotate_vector(quat_conjugate(q), 0.0f, 0.0f, 1.0f, &px, &py, &pz);
-
-      // error = measured x predicted (cross product)
-      float ex = may*pz - maz*py;
-      float ey = maz*px - max*pz;
-      float ez = max*py - may*px;
-
-      // Accumulate the error into bias
-      bx += Ki * trust * ex * dt;
-      by += Ki * trust * ey * dt;
-      bz += Ki * trust * ez * dt;
-
-      // anti-windup: real gyro bias is tiny (~a few dps). Cap it.
-      const float BIAS_MAX = 0.05f;  // rad/s, ~3 dps
-      if (bx > BIAS_MAX) bx = BIAS_MAX;
-      if (bx < -BIAS_MAX) bx = -BIAS_MAX;
-      if (by > BIAS_MAX) by = BIAS_MAX;
-      if (by < -BIAS_MAX) by = -BIAS_MAX;
-      if (bz > BIAS_MAX) bz = BIAS_MAX;
-      if (bz < -BIAS_MAX) bz = -BIAS_MAX;
-
-      // --- Step 4: feed error back into the gyro rate ---
-      wx += Kp * trust * ex;
-      wy += Kp * trust * ey;
-      wz += Kp * trust * ez;
-    }
-
-    wx -= bx;
-    wy -= by;
-    wz -= bz;
-
-    q = quat_integrate(q, wx, wy, wz, dt);
-
-    // print out the Euler values for us to read
-    float roll, pitch, yaw;
-    quat_to_euler(q, &roll, &pitch, &yaw);
-    printf("R:%7.2f P:%7.2f Y:%7.2f | mag:%4.2fg trust:%4.2f\r\n",
-           roll, pitch, yaw, an_g, trust);
-
-    HAL_Delay(200); // 200 ms delay
 
     /* USER CODE END WHILE */
 
@@ -363,6 +379,51 @@ static void MX_SPI1_Init(void)
 }
 
 /**
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM2_Init(void)
+{
+
+  /* USER CODE BEGIN TIM2_Init 0 */
+
+  /* USER CODE END TIM2_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM2_Init 1 */
+
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 8399;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 49;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* USER CODE END TIM2_Init 2 */
+
+}
+
+/**
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
@@ -449,6 +510,13 @@ int _write(int file, char *ptr, int len)
 {
   HAL_UART_Transmit(&huart2, (uint8_t *)ptr, len, HAL_MAX_DELAY);
   return len;
+}
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  if (htim->Instance == TIM2) {
+    tick_ready = 1;
+  }
 }
 
 uint8_t IMU_ReadRegister(uint8_t reg)
