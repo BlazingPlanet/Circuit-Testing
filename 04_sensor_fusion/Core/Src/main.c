@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "stm32f4xx_hal.h"
 #include "stm32f4xx_hal_tim.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -78,6 +79,8 @@ volatile uint8_t tick_ready = 0;
 
 BMP280_Calib calib; // Structure to hold calibration data
 int32_t t_fine; // Variable to hold the fine temperature value for compensation
+
+float p0; // Pressure at ground
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -113,6 +116,9 @@ void BMP280ReadRaw(int32_t *raw_temp, int32_t *raw_press); // Function to read r
 void BMP280_WriteRegister(uint8_t reg, uint8_t value);
 float BMP280CompensateTemp(int32_t raw_temp); // Function to compensate the raw temperature data using calibration data
 float BMP280CompensatePress(int32_t raw_press); // Function to compensate the raw pressure data using calibration data
+
+// Altitude Functions
+float pressure_to_altitude(float pressure_pa, float p0_pa);
 
 /* USER CODE END PFP */
 
@@ -171,11 +177,18 @@ int main(void)
   BMP280_WriteRegister(0xF4, 0x57);  // temp x2, press x16, normal mode
   HAL_Delay(100);
 
-  int32_t raw_t, raw_p;
-  BMP280ReadRaw(&raw_t, &raw_p);
-  float tC = BMP280CompensateTemp(raw_t);
-  float pPa = BMP280CompensatePress(raw_p);
-  printf("BMP280: %.2f C, %.2f Pa\r\n", tC, pPa);
+  // Establish ground reference pressure by averaging 32 samples
+  float p0_sum = 0.0f;
+  for (int i = 0; i < 32; i++) {
+    int32_t rt, rp;
+    BMP280ReadRaw(&rt, &rp);
+    BMP280CompensateTemp(rt);
+    float sample = BMP280CompensatePress(rp);
+    p0_sum += sample;
+    HAL_Delay(50);
+}
+  p0 = p0_sum / 32.0f;
+  printf("Ground reference P0: %.2f Pa\r\n", p0);
 
   // Wake accelerometer: 104 Hz 0DR, +-2g
   IMU_WriteRegister(ISM_CTRL1_XL, 0x40);
@@ -206,15 +219,25 @@ int main(void)
 
   uint32_t last_tick = HAL_GetTick();
   uint32_t pass_count = 0;
+  float altitude = 0.0f;
 
   while (1)
   {
     if (tick_ready) {
       tick_ready = 0;
+      pass_count++;
 
       uint32_t now = HAL_GetTick();
       float dt = (now - last_tick) / 1000.0f; // convert ms to seconds
       last_tick = now;
+
+      if (pass_count % 8 == 0) {       // 200 Hz / 8 = 25 Hz
+        int32_t rt, rp;
+        BMP280ReadRaw(&rt, &rp);
+        BMP280CompensateTemp(rt);
+        float press = BMP280CompensatePress(rp);
+        altitude = pressure_to_altitude(press, p0);
+      }
 
       IMU_ReadRegisters(ISM_OUTX_L_G, gyro_buf, 6);
       IMU_ReadRegisters(ISM_OUTX_L_A, accel_buf, 6);
@@ -290,10 +313,9 @@ int main(void)
       float roll, pitch, yaw;
       quat_to_euler(q, &roll, &pitch, &yaw);
       
-      pass_count++;
       if (pass_count % 40 == 0) {    // 200 Hz / 40 = ~5 lines per second
-        printf("R:%7.2f P:%7.2f Y:%7.2f | mag:%4.2fg trust:%4.2f dt:%.4f\r\n",
-          roll, pitch, yaw, an_g, trust, dt);
+        printf("R:%7.2f P:%7.2f Y:%7.2f | mag:%4.2fg trust:%4.2f alt:%6.2fm\r\n",
+          roll, pitch, yaw, an_g, trust, altitude);
       }
     }
 
@@ -758,6 +780,13 @@ float BMP280CompensatePress(int32_t raw_press)
   p = p + (var1 + var2 + ((float)calib.dig_P7)) / 16.0f;
 
   return p; // Return pressure in Pascals
+}
+
+// Convert pressure to altitude relative to a ground reference
+// Returns meters above the pad. Positive = higher than P0 (lower altitude)
+float pressure_to_altitude(float pressure_pa, float p0_pa)
+{
+  return 44330.0f * (1.0f - powf(pressure_pa / p0_pa, 0.1903f));
 }
 
 /* USER CODE END 4 */
