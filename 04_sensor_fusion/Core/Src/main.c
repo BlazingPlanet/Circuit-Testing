@@ -32,6 +32,21 @@
 typedef struct {
   float w, x, y, z;
 } Quaternion;
+
+typedef struct {
+    uint16_t dig_T1;
+    int16_t dig_T2;
+    int16_t dig_T3;
+    uint16_t dig_P1;
+    int16_t dig_P2;
+    int16_t dig_P3;
+    int16_t dig_P4;
+    int16_t dig_P5;
+    int16_t dig_P6;
+    int16_t dig_P7;
+    int16_t dig_P8;
+    int16_t dig_P9;
+} BMP280_Calib;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -60,6 +75,9 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 volatile uint8_t tick_ready = 0;
+
+BMP280_Calib calib; // Structure to hold calibration data
+int32_t t_fine; // Variable to hold the fine temperature value for compensation
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -88,6 +106,13 @@ void quat_to_euler(Quaternion q, float *roll, float *pitch, float *yaw);
 
 // BMP 280 Functions
 uint8_t BMP280_ReadRegister(uint8_t reg); // Function to read a register from the BMP280 sensor
+
+void BMP280ReadRegisters(uint8_t reg, uint8_t *buffer, uint16_t len); // Function to read multiple registers from the BMP280 sensor
+void BMP280_ReadCalibration(void); // Function to read calibration data from the BMP280 sensor
+void BMP280ReadRaw(int32_t *raw_temp, int32_t *raw_press); // Function to read raw temperature and pressure data from the BMP280 sensor
+void BMP280_WriteRegister(uint8_t reg, uint8_t value);
+float BMP280CompensateTemp(int32_t raw_temp); // Function to compensate the raw temperature data using calibration data
+float BMP280CompensatePress(int32_t raw_press); // Function to compensate the raw pressure data using calibration data
 
 /* USER CODE END PFP */
 
@@ -140,6 +165,18 @@ int main(void)
   uint8_t BMP280_ID = BMP280_ReadRegister(0xD0); // Read the chip ID register
   printf("BMP280 Chip ID: 0x%02X (expected: 0x58)\r\n", BMP280_ID); // Print the chip ID to UART
 
+  BMP280_ReadCalibration();
+  printf("dig_T1 = %u  dig_P1 = %u\r\n", calib.dig_T1, calib.dig_P1);
+
+  BMP280_WriteRegister(0xF4, 0x57);  // temp x2, press x16, normal mode
+  HAL_Delay(100);
+
+  int32_t raw_t, raw_p;
+  BMP280ReadRaw(&raw_t, &raw_p);
+  float tC = BMP280CompensateTemp(raw_t);
+  float pPa = BMP280CompensatePress(raw_p);
+  printf("BMP280: %.2f C, %.2f Pa\r\n", tC, pPa);
+
   // Wake accelerometer: 104 Hz 0DR, +-2g
   IMU_WriteRegister(ISM_CTRL1_XL, 0x40);
   // Wake gyroscope: 104 Hz 0DR, +-250 dps
@@ -148,32 +185,6 @@ int main(void)
   // Read the control registers back to confirm the wake-up took
   printf("CTRL1_XL: 0x%02X (expected 0x40)\r\n", IMU_ReadRegister(ISM_CTRL1_XL));
   printf("CTRL2_G:  0x%02X (expected 0x40)\r\n", IMU_ReadRegister(ISM_CTRL2_G));
-
-  //Primitive tests for quaternion functions
-  printf("\r\n-- Quaternion primitive tests --\r\n");
-
-  Quaternion identity = {1.0f, 0.0f, 0.0f, 0.0f};
-  Quaternion q90z = {0.7071068f, 0.0f, 0.0f, 0.7071068f}; // 90 deg rotation about Z
-  Quaternion q60x = {0.8660254f, 0.5f, 0.0f, 0.0f}; // 60 deg rotation about X
-
-  // Test 1: anything times identity is unchnaged
-  quat_print("T1 got:", quat_multiply(q90z, identity));
-  printf("T1 expected: w= 0.7071 x= 0.0000 y= 0.0000 z= 0.7071\r\n");
-
-  // Test 2: 90 about Z twice is 180 about Z
-  quat_print("T2 got:", quat_multiply(q90z, q90z));
-  printf("T2 expected: w= 0.0000 x= 0.0000 y= 0.0000 z= 1.0000\r\n");
-
-  // Test 3: Rotate then unrotate is identity
-  quat_print("T3 got:", quat_multiply(q60x, quat_conjugate(q60x)));
-  printf("T3 expected: w= 1.0000 x= 0.0000 y= 0.0000 z= 0.0000\r\n");
-
-  // Test 4: normalize undoes scaling
-  Quaternion scaled = {3.0f*0.7071068f, 0.0f, 0.0f, 3.0f*0.7071068f};
-  quat_print("T4 got:", quat_normalize(scaled));
-  printf("T4 expected: w= 0.7071 x= 0.0000 y= 0.0000 z= 0.7071\r\n");
-
-  printf("\r\n-- End Quaternion primitive tests --\r\n\r\n");
 
   HAL_TIM_Base_Start_IT(&htim2);
 
@@ -647,7 +658,9 @@ void quat_to_euler(Quaternion q, float *roll, float *pitch, float *yaw)
   *yaw = atan2f(siny_cosp, cosy_cosp) * RAD2DEG;
 }
 
+// ---
 // BMP 280 Functions
+// ---
 
 uint8_t BMP280_ReadRegister(uint8_t reg)
 {
@@ -662,6 +675,89 @@ uint8_t BMP280_ReadRegister(uint8_t reg)
   HAL_GPIO_WritePin(BMP_CS_GPIO_Port, BMP_CS_Pin, GPIO_PIN_SET); // CS High: End communication
 
   return rx[1]; // The sensors answers landed in the second byte   
+}
+
+void BMP280ReadRegisters(uint8_t reg, uint8_t *buffer, uint16_t len)
+{
+  uint8_t addr = reg | 0x80; // Address byte, bit 7 set = READ
+
+  HAL_GPIO_WritePin(BMP_CS_GPIO_Port, BMP_CS_Pin, GPIO_PIN_RESET); // CS Low: Start communication
+  HAL_SPI_Transmit(&hspi1, &addr, 1, HAL_MAX_DELAY); // exchange registers
+  HAL_SPI_Receive(&hspi1, buffer, len, HAL_MAX_DELAY); // receive data
+  HAL_GPIO_WritePin(BMP_CS_GPIO_Port, BMP_CS_Pin, GPIO_PIN_SET); // CS High: End communication
+}
+
+void BMP280_ReadCalibration(void)
+{
+  uint8_t buf[24]; // Buffer to hold calibration data
+  BMP280ReadRegisters(0x88, buf, 24); // Read 24 bytes of calibration data starting from register 0x88
+
+  calib.dig_T1 = (uint16_t)((buf[1] << 8) | buf[0]);
+  calib.dig_T2 = (int16_t)((buf[3] << 8) | buf[2]);
+  calib.dig_T3 = (int16_t)((buf[5] << 8) | buf[4]);
+  calib.dig_P1 = (uint16_t)((buf[7] << 8) | buf[6]);
+  calib.dig_P2 = (int16_t)((buf[9] << 8) | buf[8]);
+  calib.dig_P3 = (int16_t)((buf[11] << 8) | buf[10]);
+  calib.dig_P4 = (int16_t)((buf[13] << 8) | buf[12]);
+  calib.dig_P5 = (int16_t)((buf[15] << 8) | buf[14]);
+  calib.dig_P6 = (int16_t)((buf[17] << 8) | buf[16]);
+  calib.dig_P7 = (int16_t)((buf[19] << 8) | buf[18]);
+  calib.dig_P8 = (int16_t)((buf[21] << 8) | buf[20]);
+  calib.dig_P9 = (int16_t)((buf[23] << 8) | buf[22]);
+}
+
+void BMP280ReadRaw(int32_t *raw_temp, int32_t *raw_press)
+{
+  uint8_t buf[6]; // Buffer to hold raw data
+  BMP280ReadRegisters(0xF7, buf, 6); // Read 6 bytes of raw data starting from register 0xF7
+
+  *raw_press = (int32_t)((buf[0] << 12) | (buf[1] << 4) | (buf[2] >> 4)); // Combine bytes to get raw pressure
+  *raw_temp = (int32_t)((buf[3] << 12) | (buf[4] << 4) | (buf[5] >> 4)); // Combine bytes to get raw temperature
+}
+
+void BMP280_WriteRegister(uint8_t reg, uint8_t value)
+{
+    uint8_t tx[2];
+    tx[0] = reg & 0x7F;   // address byte, bit 7 cleared = WRITE
+    tx[1] = value;        // the byte to write into that register
+
+    HAL_GPIO_WritePin(BMP_CS_GPIO_Port, BMP_CS_Pin, GPIO_PIN_RESET);  // CS low
+    HAL_SPI_Transmit(&hspi1, tx, 2, HAL_MAX_DELAY);                   // send both bytes
+    HAL_GPIO_WritePin(BMP_CS_GPIO_Port, BMP_CS_Pin, GPIO_PIN_SET);    // CS high
+}
+
+float BMP280CompensateTemp(int32_t raw_temp)
+{
+  float var1, var2, T;
+  var1 = (((float)raw_temp) / 16384.0f - ((float)calib.dig_T1) / 1024.0f) * ((float)calib.dig_T2);
+  var2 = ((((float)raw_temp)/131072.0f - ((float)calib.dig_T1)/8192.0f) * 
+          (((float)raw_temp)/131072.0f - ((float)calib.dig_T1)/8192.0f)) * ((float)calib.dig_T3);
+  t_fine = (int32_t)(var1 + var2);
+  T = (var1 + var2) / 5120.0f;
+  return T; // Return temperature in degrees Celsius
+}
+
+float BMP280CompensatePress(int32_t raw_press)
+{
+  float var1, var2, p;
+  var1 = ((float)t_fine / 2.0f) - 64000.0f;
+  var2 = var1 * var1 * ((float)calib.dig_P6) / 32768.0f;
+  var2 = var2 + var1 * ((float)calib.dig_P5) * 2.0f;
+  var2 = (var2 / 4.0) + (((float)calib.dig_P4) * 65536.0f);
+  var1 = (((float)calib.dig_P3) * var1 * var1 / 524288.0f + ((float)calib.dig_P2) * var1) / 524288.0f;
+  var1 = (1.0f + var1 / 32768.0f) * ((float)calib.dig_P1);
+  
+  if (var1 == 0.0f)
+    return 0; // Avoid division by zero
+
+  p = 1048576.0f - (float)raw_press;
+  p = (p - (var2 / 4096.0f)) * 6250.0f / var1;
+  var1 = ((float)calib.dig_P9) * p * p / 2147483648.0f;
+  var2 = p * ((float)calib.dig_P8) / 32768.0f;
+  
+  p = p + (var1 + var2 + ((float)calib.dig_P7)) / 16.0f;
+
+  return p; // Return pressure in Pascals
 }
 
 /* USER CODE END 4 */
