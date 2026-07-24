@@ -186,7 +186,7 @@ int main(void)
     float sample = BMP280CompensatePress(rp);
     p0_sum += sample;
     HAL_Delay(50);
-}
+  }
   p0 = p0_sum / 32.0f;
   printf("Ground reference P0: %.2f Pa\r\n", p0);
 
@@ -309,13 +309,27 @@ int main(void)
 
       q = quat_integrate(q, wx, wy, wz, dt);
 
+      // --- world-frame linear acceleration
+      // Raw counts --> g (physical units, not the normalized direction)
+      // vector the Mahony correction uses
+      float ax_g = ax * ACCEL_SENS_2G / 1000.0f;
+      float ay_g = ay * ACCEL_SENS_2G / 1000.0f;
+      float az_g = az * ACCEL_SENS_2G / 1000.0f;
+
+      // Body --> world (pass q, not its conjugate)
+      float wax, way, waz;
+      quat_rotate_vector(q, ax_g, ay_g, az_g, &wax, &way, &waz);
+
+      // Remove gravity: world down is +Z, so a stationary sensor reads +1g
+      float lin_z = (waz - 1.0f) * GRAVITY;   // m/s^2
+
       // print out the Euler values for us to read
       float roll, pitch, yaw;
       quat_to_euler(q, &roll, &pitch, &yaw);
       
       if (pass_count % 40 == 0) {    // 200 Hz / 40 = ~5 lines per second
-        printf("R:%7.2f P:%7.2f Y:%7.2f | mag:%4.2fg trust:%4.2f alt:%6.2fm\r\n",
-          roll, pitch, yaw, an_g, trust, altitude);
+        printf("R:%7.2f P:%7.2f Y:%7.2f | mag:%4.2fg trust:%4.2f alt:%6.2fm  linZ:%6.2f m/s^2\r\n",
+          roll, pitch, yaw, an_g, trust, altitude, lin_z);
       }
     }
 
