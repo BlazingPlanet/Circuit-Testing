@@ -221,6 +221,11 @@ int main(void)
   uint32_t pass_count = 0;
   float altitude = 0.0f;
 
+  float h = 0.0f; // fused altitude estimate (m above pad)
+  float v = 0.0f; // fused vertical velocity estimate (m/s)
+  const float Kh = 0.30f; // how hard baro pulls the altitude estimate
+  const float Kv = 0.60f; // how hard baro pulls the velocity estimate
+
   while (1)
   {
     if (tick_ready) {
@@ -237,6 +242,11 @@ int main(void)
         BMP280CompensateTemp(rt);
         float press = BMP280CompensatePress(rp);
         altitude = pressure_to_altitude(press, p0);
+
+        // Correction step (25 Hz)
+        float alt_err = altitude - h;
+        h += Kh * alt_err;
+        v += Kv * alt_err;
       }
 
       IMU_ReadRegisters(ISM_OUTX_L_G, gyro_buf, 6);
@@ -321,15 +331,21 @@ int main(void)
       quat_rotate_vector(q, ax_g, ay_g, az_g, &wax, &way, &waz);
 
       // Remove gravity: world down is +Z, so a stationary sensor reads +1g
-      float lin_z = (waz - 1.0f) * GRAVITY;   // m/s^2
+      float lin_accel_z = (waz - 1.0f) * GRAVITY;   // m/s^2
+
+      // Vertical channel, predict step (200 Hz)
+      h += v * dt + 0.5f * lin_accel_z * dt * dt;
+      v += lin_accel_z * dt;
 
       // print out the Euler values for us to read
       float roll, pitch, yaw;
       quat_to_euler(q, &roll, &pitch, &yaw);
       
-      if (pass_count % 40 == 0) {    // 200 Hz / 40 = ~5 lines per second
-        printf("R:%7.2f P:%7.2f Y:%7.2f | mag:%4.2fg trust:%4.2f alt:%6.2fm  linZ:%6.2f m/s^2\r\n",
-          roll, pitch, yaw, an_g, trust, altitude, lin_z);
+      if (pass_count % 10 == 0) {    // 200 Hz / 40 = ~5 lines per second
+        //printf("R:%7.2f P:%7.2f Y:%7.2f | mag:%4.2fg trust:%4.2f alt:%6.2fm  linZ:%6.2f m/s^2\r\n",
+          //roll, pitch, yaw, an_g, trust, altitude, lin_accel_z);
+        printf("alt:%6.2f  h:%6.2f  v:%6.2f m/s  linZ:%6.2f\r\n",
+             altitude, h, v, lin_accel_z);
       }
     }
 
