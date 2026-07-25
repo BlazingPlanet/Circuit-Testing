@@ -71,6 +71,7 @@ typedef enum {
 #define BURNOUT_ACCEL_THRESH 5.0f // m/s^2, thrust gone
 #define APOGEE_VEL_THRESH -2.0f // m/s, definitively descending
 #define DEBOUNCE_PASSES 20 // 20 passes at 200 Hz = 100ms
+#define SIM_MODE 0  // 1 = synthetic flight profile, 0 = real sensors
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -130,6 +131,11 @@ float BMP280CompensatePress(int32_t raw_press); // Function to compensate the ra
 
 // Altitude Functions
 float pressure_to_altitude(float pressure_pa, float p0_pa);
+
+// SIM Functions
+#if SIM_MODE
+float sim_lin_accel_z(float t);
+#endif
 
 /* USER CODE END PFP */
 
@@ -258,9 +264,11 @@ int main(void)
         altitude = pressure_to_altitude(press, p0);
 
         // Correction step (25 Hz)
+#if !SIM_MODE        
         float alt_err = altitude - h;
         h += Kh * alt_err;
         v += Kv * alt_err;
+#endif
       }
 
       IMU_ReadRegisters(ISM_OUTX_L_G, gyro_buf, 6);
@@ -347,6 +355,13 @@ int main(void)
       // Remove gravity: world down is +Z, so a stationary sensor reads +1g
       float lin_accel_z = (waz - 1.0f) * GRAVITY;   // m/s^2
 
+// SIM MODE LIN Z
+#if SIM_MODE
+      static float sim_t = 0.0f;
+      sim_t += dt;
+      lin_accel_z = sim_lin_accel_z(sim_t);
+#endif
+
       // Vertical channel, predict step (200 Hz)
       h += v * dt + 0.5f * lin_accel_z * dt * dt;
       v += lin_accel_z * dt;
@@ -403,7 +418,7 @@ int main(void)
       float roll, pitch, yaw;
       quat_to_euler(q, &roll, &pitch, &yaw);
       
-      if (pass_count % 40 == 0) {    // 200 Hz / 40 = ~5 lines per second
+      if (pass_count % 10 == 0) {    // 200 Hz / 40 = ~5 lines per second
         //printf("R:%7.2f P:%7.2f Y:%7.2f | mag:%4.2fg trust:%4.2f alt:%6.2fm  linZ:%6.2f m/s^2\r\n",
           //roll, pitch, yaw, an_g, trust, altitude, lin_accel_z);
         //printf("alt:%6.2f  h:%6.2f  v:%6.2f m/s  linZ:%6.2f\r\n",
@@ -882,6 +897,21 @@ float pressure_to_altitude(float pressure_pa, float p0_pa)
 {
   return 44330.0f * (1.0f - powf(pressure_pa / p0_pa, 0.1903f));
 }
+
+// Synthetic vertical acceleration
+// Returns net acceleration (gravity already removed), matching lin_accel_z
+#if SIM_MODE
+float sim_lin_accel_z(float t)
+{
+  if (t < 1.0f) {
+    return 0.0f;
+  } else if (t < 4.45f) {
+    return 34.0f;
+  } else {
+    return -3.0f;
+  }
+}
+#endif
 
 /* USER CODE END 4 */
 
