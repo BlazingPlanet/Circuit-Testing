@@ -48,6 +48,13 @@ typedef struct {
     int16_t dig_P8;
     int16_t dig_P9;
 } BMP280_Calib;
+
+typedef enum {
+  FLIGHT_PAD = 0,
+  FLIGHT_BOOST,
+  FLIGHT_COAST,
+  FLIGHT_DESCENT,
+} FlightState;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -60,6 +67,10 @@ typedef struct {
 #define ACCEL_SENS_2G 0.061f // milli g's per count
 #define GYRO_SENS_250DPS 8.75f // milli dps per count
 #define GRAVITY 9.80665f // m/s^2
+#define LAUNCH_ACCEL_THRESH 15.0f // m/s^2, well above noise. replace with expected launch accel from Open Rocket
+#define BURNOUT_ACCEL_THRESH 5.0f // m/s^2, thrust gone
+#define APOGEE_VEL_THRESH -2.0f // m/s, definitively descending
+#define DEBOUNCE_PASSES 20 // 20 passes at 200 Hz = 100ms
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -226,6 +237,9 @@ int main(void)
   const float Kh = 0.30f; // how hard baro pulls the altitude estimate
   const float Kv = 0.60f; // how hard baro pulls the velocity estimate
 
+  FlightState flight_state = FLIGHT_PAD;
+  uint16_t debounce_count = 0;
+
   while (1)
   {
     if (tick_ready) {
@@ -337,15 +351,65 @@ int main(void)
       h += v * dt + 0.5f * lin_accel_z * dt * dt;
       v += lin_accel_z * dt;
 
+      // -- Flight State Machine --
+      switch (flight_state) {
+
+        case FLIGHT_PAD:
+          if (lin_accel_z > LAUNCH_ACCEL_THRESH) {
+            debounce_count++;
+            if (debounce_count >= DEBOUNCE_PASSES) {
+              flight_state = FLIGHT_BOOST;
+              debounce_count = 0;
+              printf("*** LAUNCH DETECTED ***\r\n");
+            }
+          } else {
+            debounce_count = 0;
+          }
+          break;
+
+        case FLIGHT_BOOST:
+          if (lin_accel_z < BURNOUT_ACCEL_THRESH && v > 0.0f) {
+            debounce_count++;
+            if (debounce_count >= DEBOUNCE_PASSES) {
+              flight_state = FLIGHT_COAST;
+              debounce_count = 0;
+              printf("*** BURNOUT  v=%.1f m/s  h=%.1f m ***\r\n", v, h);
+            }
+          } else {
+            debounce_count = 0;
+          }
+          break;
+
+        case FLIGHT_COAST:
+          if (v < APOGEE_VEL_THRESH) {
+            debounce_count++;
+            if (debounce_count >= DEBOUNCE_PASSES) {
+              flight_state = FLIGHT_DESCENT;
+              debounce_count = 0;
+              printf("*** APOGEE  h=%.1f m ***\r\n", h);
+            }
+          } else {
+            debounce_count = 0;
+          }
+          break;
+
+        case FLIGHT_DESCENT:
+          break;
+      }
+    
+      static const char *state_names[] = {"PAD", "BOOST", "COAST", "DESCENT"};
+
       // print out the Euler values for us to read
       float roll, pitch, yaw;
       quat_to_euler(q, &roll, &pitch, &yaw);
       
-      if (pass_count % 10 == 0) {    // 200 Hz / 40 = ~5 lines per second
+      if (pass_count % 40 == 0) {    // 200 Hz / 40 = ~5 lines per second
         //printf("R:%7.2f P:%7.2f Y:%7.2f | mag:%4.2fg trust:%4.2f alt:%6.2fm  linZ:%6.2f m/s^2\r\n",
           //roll, pitch, yaw, an_g, trust, altitude, lin_accel_z);
-        printf("alt:%6.2f  h:%6.2f  v:%6.2f m/s  linZ:%6.2f\r\n",
-             altitude, h, v, lin_accel_z);
+        //printf("alt:%6.2f  h:%6.2f  v:%6.2f m/s  linZ:%6.2f\r\n",
+             //altitude, h, v, lin_accel_z);
+        printf("%-7s h:%6.2f v:%6.2f linZ:%6.2f\r\n",
+               state_names[flight_state], h, v, lin_accel_z);
       }
     }
 
