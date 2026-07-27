@@ -64,8 +64,8 @@ typedef enum {
 #define ISM_CTRL2_G   0x11 // Gyroscope Control: 0DR + full-scale
 #define ISM_OUTX_L_G  0x22 // Gyroscope X-axis output, low byte (data block starts here)
 #define ISM_OUTX_L_A  0x28 // Accelerometer X-axis output, low byte (data block starts here)
-#define ACCEL_SENS_2G 0.061f // milli g's per count
-#define GYRO_SENS_250DPS 8.75f // milli dps per count
+#define ACCEL_SENS_8G 0.244f // milli g's per count (+-8g range)
+#define GYRO_SENS_1000DPS 35.0f // milli dps per count (+-1000 dps range)
 #define GRAVITY 9.80665f // m/s^2
 #define LAUNCH_ACCEL_THRESH 15.0f // m/s^2, well above noise. replace with expected launch accel from Open Rocket
 #define BURNOUT_ACCEL_THRESH 5.0f // m/s^2, thrust gone
@@ -207,14 +207,14 @@ int main(void)
   p0 = p0_sum / 32.0f;
   printf("Ground reference P0: %.2f Pa\r\n", p0);
 
-  // Wake accelerometer: 104 Hz 0DR, +-2g
-  IMU_WriteRegister(ISM_CTRL1_XL, 0x40);
-  // Wake gyroscope: 104 Hz 0DR, +-250 dps
-  IMU_WriteRegister(ISM_CTRL2_G, 0x40);
+  // Wake accelerometer: 208 Hz 0DR, +-8g
+  IMU_WriteRegister(ISM_CTRL1_XL, 0x5C);
+  // Wake gyroscope: 208 Hz 0DR, +-1000 dps
+  IMU_WriteRegister(ISM_CTRL2_G, 0x58);
 
   // Read the control registers back to confirm the wake-up took
-  printf("CTRL1_XL: 0x%02X (expected 0x40)\r\n", IMU_ReadRegister(ISM_CTRL1_XL));
-  printf("CTRL2_G:  0x%02X (expected 0x40)\r\n", IMU_ReadRegister(ISM_CTRL2_G));
+  printf("CTRL1_XL: 0x%02X (expected 0x5C)\r\n", IMU_ReadRegister(ISM_CTRL1_XL));
+  printf("CTRL2_G:  0x%02X (expected 0x58)\r\n", IMU_ReadRegister(ISM_CTRL2_G));
 
   HAL_TIM_Base_Start_IT(&htim2);
 
@@ -282,14 +282,14 @@ int main(void)
       int16_t gz = (int16_t)(gyro_buf[5] << 8 | gyro_buf[4]);
 
       // raw -> dps -> rad/s
-      float wx = gx * GYRO_SENS_250DPS / 1000.0f * DEG2RAD;
-      float wy = gy * GYRO_SENS_250DPS / 1000.0f * DEG2RAD;
-      float wz = gz * GYRO_SENS_250DPS / 1000.0f * DEG2RAD;
+      float wx = gx * GYRO_SENS_1000DPS / 1000.0f * DEG2RAD;
+      float wy = gy * GYRO_SENS_1000DPS / 1000.0f * DEG2RAD;
+      float wz = gz * GYRO_SENS_1000DPS / 1000.0f * DEG2RAD;
 
       // --- Step 2/3: accel correction ---
       // normalize the accelermoeter vector (we only care about DIRECTION)
       float an = sqrtf((float)ax*ax + (float)ay*ay + (float)az*az);
-      float an_g = an * ACCEL_SENS_2G / 1000.0f;  // raw counts -> g
+      float an_g = an * ACCEL_SENS_8G / 1000.0f;  // raw counts -> g
 
       float g_err = fabsf(an_g - 1.0f); //how far from pure gravity?
 
@@ -344,9 +344,9 @@ int main(void)
       // --- world-frame linear acceleration
       // Raw counts --> g (physical units, not the normalized direction)
       // vector the Mahony correction uses
-      float ax_g = ax * ACCEL_SENS_2G / 1000.0f;
-      float ay_g = ay * ACCEL_SENS_2G / 1000.0f;
-      float az_g = az * ACCEL_SENS_2G / 1000.0f;
+      float ax_g = ax * ACCEL_SENS_8G / 1000.0f;
+      float ay_g = ay * ACCEL_SENS_8G / 1000.0f;
+      float az_g = az * ACCEL_SENS_8G / 1000.0f;
 
       // Body --> world (pass q, not its conjugate)
       float wax, way, waz;
@@ -419,12 +419,12 @@ int main(void)
       quat_to_euler(q, &roll, &pitch, &yaw);
       
       if (pass_count % 10 == 0) {    // 200 Hz / 40 = ~5 lines per second
-        //printf("R:%7.2f P:%7.2f Y:%7.2f | mag:%4.2fg trust:%4.2f alt:%6.2fm  linZ:%6.2f m/s^2\r\n",
-          //roll, pitch, yaw, an_g, trust, altitude, lin_accel_z);
+        printf("R:%7.2f P:%7.2f Y:%7.2f | mag:%4.2fg trust:%4.2f alt:%6.2fm  linZ:%6.2f m/s^2\r\n",
+          roll, pitch, yaw, an_g, trust, altitude, lin_accel_z);
         //printf("alt:%6.2f  h:%6.2f  v:%6.2f m/s  linZ:%6.2f\r\n",
              //altitude, h, v, lin_accel_z);
-        printf("%-7s h:%6.2f v:%6.2f linZ:%6.2f\r\n",
-               state_names[flight_state], h, v, lin_accel_z);
+        //printf("%-7s h:%6.2f v:%6.2f linZ:%6.2f\r\n",
+               //state_names[flight_state], h, v, lin_accel_z);
       }
     }
 
@@ -908,7 +908,7 @@ float sim_lin_accel_z(float t)
   } else if (t < 4.45f) {
     return 34.0f;
   } else {
-    return -3.0f;
+    return -10.0f;
   }
 }
 #endif
