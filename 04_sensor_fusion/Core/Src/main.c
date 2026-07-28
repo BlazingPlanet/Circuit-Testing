@@ -72,6 +72,9 @@ typedef enum {
 #define APOGEE_VEL_THRESH -2.0f // m/s, definitively descending
 #define DEBOUNCE_PASSES 20 // 20 passes at 200 Hz = 100ms
 #define SIM_MODE 0  // 1 = synthetic flight profile, 0 = real sensors
+#define KF_ACCEL_NOISE 0.15f // m/s^2, accelerometer noise std dev
+#define KF_BIAS_WALK  0.005f  // m/s^2 per sqrt(s), how fast bias drifts
+#define KF_BARO_NOISE  0.40f  // m, barometer noise std dev (I measured this)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -246,6 +249,16 @@ int main(void)
   FlightState flight_state = FLIGHT_PAD;
   uint16_t debounce_count = 0;
 
+  // --- Kalman state ---
+  float kf_h = 0.0f;   // altitude estimate (m)
+  float kf_v = 0.0f;   // velocity estiamte (m/s)
+  float kf_b = 0.0f;   // accelerometer bias (m/s^2)
+
+  // Covariance, symmetric 3x3 (six unique terms)
+  float p00 = 1.0f,  p01 = 0.0f,  p02 = 0.0f;
+  float p11 = 1.0f,  p12 = 0.0f;
+  float p22 = 1.0f;            
+
   while (1)
   {
     if (tick_ready) {
@@ -268,6 +281,28 @@ int main(void)
         float alt_err = altitude - h;
         h += Kh * alt_err;
         v += Kv * alt_err;
+
+        {
+          float y = altitude - kf_h;
+          float S = p00 + KF_BARO_NOISE * KF_BARO_NOISE;
+          float k0 = p00 / S;
+          float k1 = p01 / S;
+          float k2 = p02 / S;
+
+          kf_h += k0 * y;
+          kf_v += k1 * y;
+          kf_b += k2 * y;
+
+          float m00 = (1.0f - k0) * p00;
+          float m01 = (1.0f - k0) * p01;
+          float m02 = (1.0f - k0) * p02;
+          float m11 = p11 - k1 * p01;
+          float m12 = p12 - k1 * p02;
+          float m22 = p22 - k2 * p02;
+
+          p00 = m00; p01 = m01; p02 = m02;
+          p11 = m11; p12 = m12; p22 = m22;
+        }
 #endif
       }
 
@@ -366,6 +401,42 @@ int main(void)
       h += v * dt + 0.5f * lin_accel_z * dt * dt;
       v += lin_accel_z * dt;
 
+      // --- Kalman predict (200Hz) ---
+      {
+        float a = lin_accel_z - kf_b;
+
+        kf_h += kf_v * dt + 0.5f * a *dt * dt;
+        kf_v += a * dt;
+
+        float c = -0.5f * dt * dt;
+        float d = -dt;
+
+        float f00 = p00 + dt*p01 + c*p02;
+        float f01 = p01 + dt*p11 + c*p12;
+        float f02 = p02 + dt*p12 + c*p22;
+        float f10 = p01 + d*p02;
+        float f11 = p11 + d*p12;
+        float f12 = p12 + d*p22;
+        float f22 = p22;
+
+        float n00 = f00 + dt*f01 + c*f02;
+        float n01 = f01 + d*f02;
+        float n02 = f02;
+        float n11 = f11 + d*f12;
+        float n12 = f12;
+        float n22 = f22;
+
+        float sa2 = KF_ACCEL_NOISE * KF_ACCEL_NOISE;
+        float dt2 = dt * dt;
+        n00 += sa2 * dt2 * dt2 * 0.25f;
+        n01 += sa2 * dt2 * dt * 0.5f;
+        n11 += sa2 * dt2;
+        n22 += KF_BIAS_WALK * KF_BIAS_WALK * dt;
+
+        p00 = n00; p01 = n01; p02 = n02;
+        p11 = n11; p12 = n12; p22 = n22;
+      }
+
       // -- Flight State Machine --
       switch (flight_state) {
 
@@ -419,12 +490,16 @@ int main(void)
       quat_to_euler(q, &roll, &pitch, &yaw);
       
       if (pass_count % 10 == 0) {    // 200 Hz / 40 = ~5 lines per second
-        printf("R:%7.2f P:%7.2f Y:%7.2f | mag:%4.2fg trust:%4.2f alt:%6.2fm  linZ:%6.2f m/s^2\r\n",
-          roll, pitch, yaw, an_g, trust, altitude, lin_accel_z);
+        //printf("R:%7.2f P:%7.2f Y:%7.2f | mag:%4.2fg trust:%4.2f alt:%6.2fm  linZ:%6.2f m/s^2\r\n",
+          //roll, pitch, yaw, an_g, trust, altitude, lin_accel_z);
         //printf("alt:%6.2f  h:%6.2f  v:%6.2f m/s  linZ:%6.2f\r\n",
              //altitude, h, v, lin_accel_z);
         //printf("%-7s h:%6.2f v:%6.2f linZ:%6.2f\r\n",
                //state_names[flight_state], h, v, lin_accel_z);
+
+         printf("%-7s | comp h:%6.2f v:%6.2f | kf h:%6.2f v:%6.2f b:%5.2f | K:%4.2f\r\n",
+             state_names[flight_state], h, v, kf_h, kf_v, kf_b,
+             p00 / (p00 + KF_BARO_NOISE * KF_BARO_NOISE));
       }
     }
 
