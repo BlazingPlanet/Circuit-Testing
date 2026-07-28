@@ -122,6 +122,8 @@ void quat_rotate_vector(Quaternion q, float vx, float vy, float vz, float *rx, f
 
 void quat_to_euler(Quaternion q, float *roll, float *pitch, float *yaw);
 
+void attitude_tilt(Quaternion q, float *tilt_deg, float *err_y, float *err_z);
+
 // BMP 280 Functions
 uint8_t BMP280_ReadRegister(uint8_t reg); // Function to read a register from the BMP280 sensor
 
@@ -500,10 +502,13 @@ int main(void)
              //altitude, h, v, lin_accel_z);
         //printf("%-7s h:%6.2f v:%6.2f linZ:%6.2f\r\n",
                //state_names[flight_state], h, v, lin_accel_z);
-
-        printf("%-7s h:%6.2f v:%6.2f b:%5.2f | K:%4.2f linZ:%6.2f\r\n",
-              state_names[flight_state], kf_h, kf_v, kf_b,
-              p00 / (p00 + KF_BARO_NOISE * KF_BARO_NOISE), lin_accel_z);
+        //printf("%-7s h:%6.2f v:%6.2f b:%5.2f | K:%4.2f linZ:%6.2f\r\n",
+              //state_names[flight_state], kf_h, kf_v, kf_b,
+              //p00 / (p00 + KF_BARO_NOISE * KF_BARO_NOISE), lin_accel_z);
+        float tilt, err_y, err_z;
+        attitude_tilt(q, &tilt, &err_y, &err_z);
+        printf("%-7s tilt:%6.2f eY:%6.3f eZ:%6.3f | h:%6.2f v:%6.2f\r\n",
+                state_names[flight_state], tilt, err_y, err_z, kf_h, kf_v);
       }
     }
 
@@ -866,6 +871,27 @@ void quat_to_euler(Quaternion q, float *roll, float *pitch, float *yaw)
   float siny_cosp = 2.0f * (q.w*q.z + q.x*q.y);
   float cosy_cosp = 1.0f - 2.0f * (q.y*q.y + q.z*q.z);
   *yaw = atan2f(siny_cosp, cosy_cosp) * RAD2DEG;
+}
+
+// Nose attitude relative to vertical
+// tilt_deg: total angle of the nose (body +X) away from straigh up. No singularity.
+// dir_deg: which way it's leaning, in the world horizontal plane
+// nx, ny: horizontal components of the nose vector -- the two control error signals
+void attitude_tilt(Quaternion q, float *tilt_deg, float *err_y, float *err_z)
+{
+  const float RAD2DEG = 180.0f / 3.14159265f;
+
+  // Rotate body +X (out the nose) into the world frame
+  float ux, uy, uz;
+  quat_rotate_vector(quat_conjugate(q), 0.0f, 0.0f, 1.0f, &ux, &uy, &uz);
+
+  float c = ux;
+  if (c >  1.0f) c =  1.0f;
+  if (c < -1.0f) c = -1.0f;
+  *tilt_deg = acosf(c) * RAD2DEG;
+
+  *err_y = uy;
+  *err_z = uz;
 }
 
 // ---
