@@ -241,10 +241,12 @@ int main(void)
   uint32_t pass_count = 0;
   float altitude = 0.0f;
 
-  float h = 0.0f; // fused altitude estimate (m above pad)
-  float v = 0.0f; // fused vertical velocity estimate (m/s)
-  const float Kh = 0.30f; // how hard baro pulls the altitude estimate
-  const float Kv = 0.60f; // how hard baro pulls the velocity estimate
+  // Complimentary filter values for altitude/velocity fusion (OLD)
+
+  //float h = 0.0f; // fused altitude estimate (m above pad)
+  //float v = 0.0f; // fused vertical velocity estimate (m/s)
+  //const float Kh = 0.30f; // how hard baro pulls the altitude estimate
+  //const float Kv = 0.60f; // how hard baro pulls the velocity estimate
 
   FlightState flight_state = FLIGHT_PAD;
   uint16_t debounce_count = 0;
@@ -278,10 +280,12 @@ int main(void)
 
         // Correction step (25 Hz)
 #if !SIM_MODE        
-        float alt_err = altitude - h;
-        h += Kh * alt_err;
-        v += Kv * alt_err;
-
+        // OLD COMPLIMENTARY FILTER
+        // float alt_err = altitude - h;
+        // h += Kh * alt_err;
+        // v += Kv * alt_err;
+        
+        // --- Kalman Update (25 Hz) --- 
         {
           float y = altitude - kf_h;
           float S = p00 + KF_BARO_NOISE * KF_BARO_NOISE;
@@ -397,9 +401,9 @@ int main(void)
       lin_accel_z = sim_lin_accel_z(sim_t);
 #endif
 
-      // Vertical channel, predict step (200 Hz)
-      h += v * dt + 0.5f * lin_accel_z * dt * dt;
-      v += lin_accel_z * dt;
+      // Vertical channel, predict step (200 Hz) (OLD COMPLIMENTARY FILER)
+      // h += v * dt + 0.5f * lin_accel_z * dt * dt;
+      // v += lin_accel_z * dt;
 
       // --- Kalman predict (200Hz) ---
       {
@@ -454,12 +458,12 @@ int main(void)
           break;
 
         case FLIGHT_BOOST:
-          if (lin_accel_z < BURNOUT_ACCEL_THRESH && v > 0.0f) {
+          if (lin_accel_z < BURNOUT_ACCEL_THRESH && kf_v > 0.0f) {
             debounce_count++;
             if (debounce_count >= DEBOUNCE_PASSES) {
               flight_state = FLIGHT_COAST;
               debounce_count = 0;
-              printf("*** BURNOUT  v=%.1f m/s  h=%.1f m ***\r\n", v, h);
+              printf("*** BURNOUT  v=%.1f m/s  h=%.1f m ***\r\n", kf_v, kf_h);
             }
           } else {
             debounce_count = 0;
@@ -467,12 +471,12 @@ int main(void)
           break;
 
         case FLIGHT_COAST:
-          if (v < APOGEE_VEL_THRESH) {
+          if (kf_v < APOGEE_VEL_THRESH) {
             debounce_count++;
             if (debounce_count >= DEBOUNCE_PASSES) {
               flight_state = FLIGHT_DESCENT;
               debounce_count = 0;
-              printf("*** APOGEE  h=%.1f m ***\r\n", h);
+              printf("*** APOGEE  h=%.1f m ***\r\n", kf_h);
             }
           } else {
             debounce_count = 0;
@@ -497,9 +501,9 @@ int main(void)
         //printf("%-7s h:%6.2f v:%6.2f linZ:%6.2f\r\n",
                //state_names[flight_state], h, v, lin_accel_z);
 
-         printf("%-7s | comp h:%6.2f v:%6.2f | kf h:%6.2f v:%6.2f b:%5.2f | K:%4.2f\r\n",
-             state_names[flight_state], h, v, kf_h, kf_v, kf_b,
-             p00 / (p00 + KF_BARO_NOISE * KF_BARO_NOISE));
+        printf("%-7s h:%6.2f v:%6.2f b:%5.2f | K:%4.2f linZ:%6.2f\r\n",
+              state_names[flight_state], kf_h, kf_v, kf_b,
+              p00 / (p00 + KF_BARO_NOISE * KF_BARO_NOISE), lin_accel_z);
       }
     }
 
