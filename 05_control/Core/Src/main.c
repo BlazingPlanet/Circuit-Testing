@@ -875,13 +875,12 @@ void quat_to_euler(Quaternion q, float *roll, float *pitch, float *yaw)
 
 // Nose attitude relative to vertical
 // tilt_deg: total angle of the nose (body +X) away from straigh up. No singularity.
-// dir_deg: which way it's leaning, in the world horizontal plane
 // nx, ny: horizontal components of the nose vector -- the two control error signals
 void attitude_tilt(Quaternion q, float *tilt_deg, float *err_y, float *err_z)
 {
   const float RAD2DEG = 180.0f / 3.14159265f;
 
-  // Rotate body +X (out the nose) into the world frame
+  // Rotate world up into the body frame
   float ux, uy, uz;
   quat_rotate_vector(quat_conjugate(q), 0.0f, 0.0f, 1.0f, &ux, &uy, &uz);
 
@@ -890,8 +889,10 @@ void attitude_tilt(Quaternion q, float *tilt_deg, float *err_y, float *err_z)
   if (c < -1.0f) c = -1.0f;
   *tilt_deg = acosf(c) * RAD2DEG;
 
-  *err_y = uy;
-  *err_z = uz;
+  // Attitude error as a rotation vector: (body +X) x (world up) = (0, -uz, uy)
+  // Magnitude is sin(tilt), so ~= tilt in radians for small angles.
+  *err_y = -uz;
+  *err_z = uy;
 }
 
 // ---
