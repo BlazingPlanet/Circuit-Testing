@@ -367,7 +367,7 @@ int main(void)
       if (an > 1e-3f) {
         float max = ax / an, may = ay / an, maz = az / an; // measured gravity direction
 
-        // predicted gravity in body frame = q* applied to world down (0,0,1)
+        // predicted gravity in body frame = q* applied to world up (0,0,1)
         float px, py, pz;
         quat_rotate_vector(quat_conjugate(q), 0.0f, 0.0f, 1.0f, &px, &py, &pz);
 
@@ -402,6 +402,10 @@ int main(void)
 
       q = quat_integrate(q, wx, wy, wz, dt);
 
+      // Attitude error for control
+      float tilt, err_y, err_z;
+      attitude_tilt(q, &tilt, &err_y, &err_z);
+
       // --- world-frame linear acceleration
       // Raw counts --> g (physical units, not the normalized direction)
       // vector the Mahony correction uses
@@ -413,7 +417,7 @@ int main(void)
       float wax, way, waz;
       quat_rotate_vector(q, ax_g, ay_g, az_g, &wax, &way, &waz);
 
-      // Remove gravity: world down is +Z, so a stationary sensor reads +1g
+      // Remove gravity: world up is +Z, so a stationary sensor reads +1g
       float lin_accel_z = (waz - 1.0f) * GRAVITY;   // m/s^2
 
 // SIM MODE LIN Z
@@ -510,12 +514,8 @@ int main(void)
       }
     
       static const char *state_names[] = {"PAD", "BOOST", "COAST", "DESCENT"};
-
-      // print out the Euler values for us to read
-      float roll, pitch, yaw;
-      quat_to_euler(q, &roll, &pitch, &yaw);
       
-      if (pass_count % 20 == 0) {    // 200 Hz / 40 = ~5 lines per second
+      if (pass_count % 10 == 0) {    // 200 Hz / 10 = ~20 lines per second
         //printf("R:%7.2f P:%7.2f Y:%7.2f | mag:%4.2fg trust:%4.2f alt:%6.2fm  linZ:%6.2f m/s^2\r\n",
           //roll, pitch, yaw, an_g, trust, altitude, lin_accel_z);
         //printf("alt:%6.2f  h:%6.2f  v:%6.2f m/s  linZ:%6.2f\r\n",
@@ -525,8 +525,6 @@ int main(void)
         //printf("%-7s h:%6.2f v:%6.2f b:%5.2f | K:%4.2f linZ:%6.2f\r\n",
               //state_names[flight_state], kf_h, kf_v, kf_b,
               //p00 / (p00 + KF_BARO_NOISE * KF_BARO_NOISE), lin_accel_z);
-        float tilt, err_y, err_z;
-        attitude_tilt(q, &tilt, &err_y, &err_z);
         printf("%-7s tilt:%6.2f eY:%6.3f eZ:%6.3f | h:%6.2f v:%6.2f\r\n",
                 state_names[flight_state], tilt, err_y, err_z, kf_h, kf_v);
       }
@@ -909,7 +907,8 @@ Quaternion quat_from_two_vectors(float ax, float ay, float az, float bx_, float 
 }
 
 // Nose attitude relative to vertical
-// tilt_deg: total angle of the nose (body +X) away from straigh up. No singularity.
+// tilt_deg: total angle of the nose (body +X) away from straight up. No singularity.
+// err_y, err_z: attitude error as rotation about body +Y and +Z -- the control error signals
 void attitude_tilt(Quaternion q, float *tilt_deg, float *err_y, float *err_z)
 {
   const float RAD2DEG = 180.0f / 3.14159265f;
