@@ -124,6 +124,8 @@ void quat_to_euler(Quaternion q, float *roll, float *pitch, float *yaw);
 
 void attitude_tilt(Quaternion q, float *tilt_deg, float *err_y, float *err_z);
 
+Quaternion quat_from_two_vectors(float ax, float ay, float az, float bx_, float by_, float bz_);
+
 // BMP 280 Functions
 uint8_t BMP280_ReadRegister(uint8_t reg); // Function to read a register from the BMP280 sensor
 
@@ -230,7 +232,25 @@ int main(void)
   uint8_t accel_buf[6];
   uint8_t gyro_buf[6];
 
+   // Seed attitude from gravity. Board must be stationary at boot
+  HAL_Delay(50);   // let the accel produce a valid sample after wake up
+
+  uint8_t init_buf[6];
+  IMU_ReadRegisters(ISM_OUTX_L_A, init_buf, 6);
+  int16_t iax = (int16_t)(init_buf[1] << 8 | init_buf[0]);
+  int16_t iay = (int16_t)(init_buf[3] << 8 | init_buf[2]);
+  int16_t iaz = (int16_t)(init_buf[5] << 8 | init_buf[4]);
+  float inorm = sqrtf((float)iax*iax + (float)iay*iay + (float)iaz*iaz);
+
   Quaternion q = {1.0f, 0.0f, 0.0f, 0.0f}; // start at identity (no rotation)
+  if (inorm > 1e-3f) {
+    // Measured world-up direction in body coordinates
+    float ux0 = iax / inorm, uy0 = iay / inorm, uz0 = iaz / inorm;
+    // Rotate carrying world-up (0,0,1) onto the measured direction
+    q = quat_from_two_vectors(ux0, uy0, uz0, 0.0f, 0.0f, 1.0f);
+  }
+  quat_print("seed q:", q);
+
   float bx = 0.0f, by = 0.0f, bz = 0.0f; // estimated gyro bias (rad/s)
   const float DEG2RAD = 3.14159265358979323846f / 180.0f;
 
@@ -495,7 +515,7 @@ int main(void)
       float roll, pitch, yaw;
       quat_to_euler(q, &roll, &pitch, &yaw);
       
-      if (pass_count % 10 == 0) {    // 200 Hz / 40 = ~5 lines per second
+      if (pass_count % 20 == 0) {    // 200 Hz / 40 = ~5 lines per second
         //printf("R:%7.2f P:%7.2f Y:%7.2f | mag:%4.2fg trust:%4.2f alt:%6.2fm  linZ:%6.2f m/s^2\r\n",
           //roll, pitch, yaw, an_g, trust, altitude, lin_accel_z);
         //printf("alt:%6.2f  h:%6.2f  v:%6.2f m/s  linZ:%6.2f\r\n",
@@ -873,9 +893,23 @@ void quat_to_euler(Quaternion q, float *roll, float *pitch, float *yaw)
   *yaw = atan2f(siny_cosp, cosy_cosp) * RAD2DEG;
 }
 
+// Shortest arc quaternion rotating vector a onto vector b
+// Both inputs must be unit length. Returns identity if a and b are antiparallel
+Quaternion quat_from_two_vectors(float ax, float ay, float az, float bx_, float by_, float bz_)
+{
+  float dot = ax*bx_ + ay*by_ + az*bz_;
+
+  Quaternion q;
+  q.w = 1.0f + dot;
+  q.x = ay*bz_ - az*by_;  // a x b
+  q.y = az*bx_ - ax*bz_;
+  q.z = ax*by_ - ay*bx_;
+
+  return quat_normalize(q);
+}
+
 // Nose attitude relative to vertical
 // tilt_deg: total angle of the nose (body +X) away from straigh up. No singularity.
-// nx, ny: horizontal components of the nose vector -- the two control error signals
 void attitude_tilt(Quaternion q, float *tilt_deg, float *err_y, float *err_z)
 {
   const float RAD2DEG = 180.0f / 3.14159265f;
