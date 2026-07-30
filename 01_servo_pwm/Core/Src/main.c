@@ -99,6 +99,9 @@ int main(void)
   MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 1500);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -108,13 +111,6 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    HAL_ADC_Start(&hadc1);
-    HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-    uint32_t adc_value = HAL_ADC_GetValue(&hadc1);
-
-    uint16_t pulse = 1000 + ((4095 - adc_value) * 1000) / 4095; // Map ADC value to pulse width (1000-2000us)
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pulse);
-    HAL_Delay(20); // Delay for stability
   
   }
   /* USER CODE END 3 */
