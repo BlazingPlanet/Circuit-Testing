@@ -18,7 +18,6 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "stm32f4xx_hal.h"
 #include "stm32f4xx_hal_tim.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -75,7 +74,22 @@ typedef enum {
 #define KF_ACCEL_NOISE 0.15f // m/s^2, accelerometer noise std dev
 #define KF_BIAS_WALK  0.005f  // m/s^2 per sqrt(s), how fast bias drifts
 #define KF_BARO_NOISE  0.40f  // m, barometer noise std dev (I measured this)
-#define MAX_DEFLECT 5.0f  // mechanical limit to servo gimbal (degrees)
+
+// ---- Servo calibration (measured 2026-07-31, 6.75" lever arm) ----
+// Channel map:
+//   TIM3_CH1 = PB4 = Arduino D5 = mount "Y" axis servo
+//   TIM3_CH2 = PB5 = Arduino D4 = mount "X" axis servo
+#define SERVO_MY_TRIM   1575    // µs at gimbal neutral
+#define SERVO_MY_USPD   44.4f   // µs per gimbal degree
+#define SERVO_MY_MIN    1200    // µs, inside mechanical stop at 1150
+#define SERVO_MY_MAX    1900    // µs, inside mechanical stop at 1950
+
+#define SERVO_MX_TRIM   1825    // µs, at gimbal neutral
+#define SERVO_MX_USPD   48.5f   // µs, per gimbal degree
+#define SERVO_MX_MIN    1475    // µs, inside mechanical stop at 1425
+#define SERVO_MX_MAX    2300    // µs, inside mechanical stop at 2350
+
+#define MAX_DEFLECT     6.0f    // gimbal degrees, both axes
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -87,6 +101,7 @@ typedef enum {
 SPI_HandleTypeDef hspi1;
 
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
 
 UART_HandleTypeDef huart2;
 
@@ -105,6 +120,7 @@ static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 
 // IMU & Orientation Functions
@@ -184,6 +200,7 @@ int main(void)
   MX_USART2_UART_Init();
   MX_SPI1_Init();
   MX_TIM2_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
   // CS rests HIGH (deselected). Overrides CubeMX's startup LOW
   HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET);
@@ -225,6 +242,12 @@ int main(void)
   printf("CTRL2_G:  0x%02X (expected 0x58)\r\n", IMU_ReadRegister(ISM_CTRL2_G));
 
   HAL_TIM_Base_Start_IT(&htim2);
+
+  // Servo PWM on TIM3: CH1 = PB4, CH2 = PB5
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, SERVO_MY_TRIM);   // y axis servo
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, SERVO_MX_TRIM);   // x axis servo
 
   /* USER CODE END 2 */
 
@@ -353,8 +376,9 @@ int main(void)
       float wz = gz * GYRO_SENS_1000DPS / 1000.0f * DEG2RAD;
 
       // --- Step 2/3: accel correction ---
-      // normalize the accelermoeter vector (we only care about DIRECTION)
+      // Calcualte magnitude of accel readings
       float an = sqrtf((float)ax*ax + (float)ay*ay + (float)az*az);
+      // Convert magnitude to g's and compare to 1.0g. g_err should read 0 at rest
       float an_g = an * ACCEL_SENS_8G / 1000.0f;  // raw counts -> g
 
       float g_err = fabsf(an_g - 1.0f); //how far from pure gravity?
@@ -689,6 +713,59 @@ static void MX_TIM2_Init(void)
   /* USER CODE BEGIN TIM2_Init 2 */
 
   /* USER CODE END TIM2_Init 2 */
+
+}
+
+/**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 83;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 19999;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+  HAL_TIM_MspPostInit(&htim3);
 
 }
 
