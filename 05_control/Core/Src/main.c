@@ -75,6 +75,7 @@ typedef enum {
 #define KF_ACCEL_NOISE 0.15f // m/s^2, accelerometer noise std dev
 #define KF_BIAS_WALK  0.005f  // m/s^2 per sqrt(s), how fast bias drifts
 #define KF_BARO_NOISE  0.40f  // m, barometer noise std dev (I measured this)
+#define MAX_DEFLECT 5.0f  // mechanical limit to servo gimbal (degrees)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -275,13 +276,17 @@ int main(void)
 
   // --- Kalman state ---
   float kf_h = 0.0f;   // altitude estimate (m)
-  float kf_v = 0.0f;   // velocity estiamte (m/s)
+  float kf_v = 0.0f;   // velocity estimate (m/s)
   float kf_b = 0.0f;   // accelerometer bias (m/s^2)
 
   // Covariance, symmetric 3x3 (six unique terms)
   float p00 = 1.0f,  p01 = 0.0f,  p02 = 0.0f;
   float p11 = 1.0f,  p12 = 0.0f;
-  float p22 = 1.0f;            
+  float p22 = 1.0f;  
+  
+  // Control gain
+  const float Kp_att = 30.0f;  // gimbal degrees per radian of attitude error, can be tuned
+  const float Kd_att = 3.0f;   // gimbal degrees per rad/s of body rate
 
   while (1)
   {
@@ -406,6 +411,18 @@ int main(void)
       float tilt, err_y, err_z;
       attitude_tilt(q, &tilt, &err_y, &err_z);
 
+      // --- Control law
+      //float cmd_y = Kp_att * err_y - Kd_att * wy;  // gimbal deg about body +Y
+      //float cmd_z = Kp_att * err_z - Kd_att * wz;  // gimbal deg about body +Z
+
+      float p_y = Kp_att * err_y;
+      float d_y = -Kd_att * wy;
+      float cmd_y = p_y + d_y;
+
+      float p_z = Kp_att * err_z;
+      float d_z = -Kd_att * wz;
+      float cmd_z = p_z + d_z;
+
       // --- world-frame linear acceleration
       // Raw counts --> g (physical units, not the normalized direction)
       // vector the Mahony correction uses
@@ -525,8 +542,8 @@ int main(void)
         //printf("%-7s h:%6.2f v:%6.2f b:%5.2f | K:%4.2f linZ:%6.2f\r\n",
               //state_names[flight_state], kf_h, kf_v, kf_b,
               //p00 / (p00 + KF_BARO_NOISE * KF_BARO_NOISE), lin_accel_z);
-        printf("%-7s tilt:%6.2f eY:%6.3f eZ:%6.3f | h:%6.2f v:%6.2f\r\n",
-                state_names[flight_state], tilt, err_y, err_z, kf_h, kf_v);
+        printf("%-7s tilt:%6.2f eY:%6.3f eZ:%6.3f | cy:%6.2f cz:%6.2f | h:%6.2f v:%6.2f\r\n",
+               state_names[flight_state], tilt, err_y, err_z, cmd_y, cmd_z, kf_h, kf_v);       
       }
     }
 
