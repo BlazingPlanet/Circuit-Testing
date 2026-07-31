@@ -285,8 +285,8 @@ int main(void)
   float p22 = 1.0f;  
   
   // Control gain
-  const float Kp_att = 30.0f;  // gimbal degrees per radian of attitude error, can be tuned
-  const float Kd_att = 3.0f;   // gimbal degrees per rad/s of body rate
+  const float Kp_att = 30.0f;  // gimbal degrees per radian of attitude error <----- MUST BE TUNED
+  const float Kd_att = 3.0f;   // gimbal degrees per rad/s of body rate <----- MUST BE TUNED
 
   while (1)
   {
@@ -411,18 +411,6 @@ int main(void)
       float tilt, err_y, err_z;
       attitude_tilt(q, &tilt, &err_y, &err_z);
 
-      // --- Control law
-      //float cmd_y = Kp_att * err_y - Kd_att * wy;  // gimbal deg about body +Y
-      //float cmd_z = Kp_att * err_z - Kd_att * wz;  // gimbal deg about body +Z
-
-      float p_y = Kp_att * err_y;
-      float d_y = -Kd_att * wy;
-      float cmd_y = p_y + d_y;
-
-      float p_z = Kp_att * err_z;
-      float d_z = -Kd_att * wz;
-      float cmd_z = p_z + d_z;
-
       // --- world-frame linear acceleration
       // Raw counts --> g (physical units, not the normalized direction)
       // vector the Mahony correction uses
@@ -529,7 +517,27 @@ int main(void)
         case FLIGHT_DESCENT:
           break;
       }
-    
+      
+      // --- Control law: only active during BOOST phase ---
+      float cmd_y = 0.0f;
+      float cmd_z = 0.0f; 
+
+      if (flight_state == FLIGHT_BOOST) {
+        float p_y = Kp_att * err_y;  // Proportional term Y
+        float d_y = -Kd_att * wy;    // Derivative term Y
+        cmd_y = p_y + d_y;     // command = P+D
+
+        float p_z = Kp_att * err_z;  // Proportional term Y
+        float d_z = -Kd_att * wz;    // Derivative term Z
+        cmd_z = p_z + d_z;     // command = P+D
+
+        // servo hard stop limits
+        if (cmd_y > MAX_DEFLECT) cmd_y = MAX_DEFLECT;
+        if (cmd_y < -MAX_DEFLECT) cmd_y = -MAX_DEFLECT;
+        if (cmd_z > MAX_DEFLECT) cmd_z = MAX_DEFLECT;
+        if (cmd_z < -MAX_DEFLECT) cmd_z = -MAX_DEFLECT;
+      }
+
       static const char *state_names[] = {"PAD", "BOOST", "COAST", "DESCENT"};
       
       if (pass_count % 10 == 0) {    // 200 Hz / 10 = ~20 lines per second
