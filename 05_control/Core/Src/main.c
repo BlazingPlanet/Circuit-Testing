@@ -90,6 +90,9 @@ typedef enum {
 #define SERVO_MX_MAX    2300    // µs, inside mechanical stop at 2350
 
 #define MAX_DEFLECT     6.0f    // gimbal degrees, both axes
+
+#define SERVO_MY_SIGN   (+1.0f) // TBD -- verify by hand before flight
+#define SERVO_MX_SIGN   (+1.0f) // TBD -- verify by hand before flight
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -161,6 +164,9 @@ float pressure_to_altitude(float pressure_pa, float p0_pa);
 float sim_lin_accel_z(float t);
 #endif
 
+// Control Functions
+static uint16_t gimbal_to_pulse(float cmd_deg, float sign, uint16_t trim, float us_per_deg, uint16_t min_us, uint16_t max_us);
+                                
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -562,6 +568,10 @@ int main(void)
         if (cmd_z < -MAX_DEFLECT) cmd_z = -MAX_DEFLECT;
       }
 
+      // --- Mixing: runs every tick, sets servo to trim if not in BOOST ---
+      uint16_t pulse_y = gimbal_to_pulse(cmd_y, SERVO_MY_SIGN, SERVO_MY_TRIM, SERVO_MY_USPD, SERVO_MY_MIN, SERVO_MY_MAX);
+      uint16_t pulse_z = gimbal_to_pulse(cmd_z, SERVO_MX_SIGN, SERVO_MX_TRIM, SERVO_MX_USPD, SERVO_MX_MIN, SERVO_MX_MAX);
+
       static const char *state_names[] = {"PAD", "BOOST", "COAST", "DESCENT"};
       
       if (pass_count % 10 == 0) {    // 200 Hz / 10 = ~20 lines per second
@@ -574,8 +584,8 @@ int main(void)
         //printf("%-7s h:%6.2f v:%6.2f b:%5.2f | K:%4.2f linZ:%6.2f\r\n",
               //state_names[flight_state], kf_h, kf_v, kf_b,
               //p00 / (p00 + KF_BARO_NOISE * KF_BARO_NOISE), lin_accel_z);
-        printf("%-7s tilt:%6.2f eY:%6.3f eZ:%6.3f | cy:%6.2f cz:%6.2f | h:%6.2f v:%6.2f\r\n",
-               state_names[flight_state], tilt, err_y, err_z, cmd_y, cmd_z, kf_h, kf_v);       
+        printf("%-7s tilt:%6.2f eY:%6.3f eZ:%6.3f | cy:%6.2f cz:%6.2f | py:%4u pz:%4u\r\n",
+               state_names[flight_state], tilt, err_y, err_z, cmd_y, cmd_z, pulse_y, pulse_z);      
       }
     }
 
@@ -1139,14 +1149,33 @@ float pressure_to_altitude(float pressure_pa, float p0_pa)
   return 44330.0f * (1.0f - powf(pressure_pa / p0_pa, 0.1903f));
 }
 
+// --- Control Functions ---
+// Convert a commanded gimbal deflection (degrees) to a servo pulse width (microseconds)
+// sign: +1 or -1, set emprically so that a positive command produces a 
+// deflection that CORRECTS the attitude error. Not derivable on paper.
+static uint16_t gimbal_to_pulse(float cmd_deg, float sign, uint16_t trim, float us_per_deg, uint16_t min_us, uint16_t max_us)
+{
+  // Guard 1: limit deflection to the verifiied linear working range
+  if (cmd_deg > MAX_DEFLECT) cmd_deg = MAX_DEFLECT;
+  if (cmd_deg < -MAX_DEFLECT) cmd_deg = -MAX_DEFLECT;
+
+  float pulse = (float)trim + sign * cmd_deg * us_per_deg;
+
+  // Guard 2: hard bound inside the mechanical stops, independent of guard 1
+  if (pulse < (float)min_us) pulse = (float)min_us;
+  if (pulse > (float)max_us) pulse = (float)max_us;
+
+  return (uint16_t)(pulse + 0.5f); // round rather than truncate
+}
+
 // Synthetic vertical acceleration
 // Returns net acceleration (gravity already removed), matching lin_accel_z
 #if SIM_MODE
 float sim_lin_accel_z(float t)
 {
-  if (t < 1.0f) {
+  if (t < 2.0f) {
     return 0.0f;
-  } else if (t < 4.45f) {
+  } else if (t < 15.0f) {
     return 34.0f;
   } else {
     return -10.0f;

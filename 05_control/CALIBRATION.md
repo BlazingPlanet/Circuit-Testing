@@ -13,15 +13,17 @@ Five naming systems are in play. This table is authoritative.
 
 | Timer channel | STM32 pin | Arduino label | Mount label | IMU axis |
 |---|---|---|---|---|
-| TIM3_CH1 | PB4 | D5 | "Y" | TBD |
-| TIM3_CH2 | PB5 | D4 | "X" | TBD |
+| TIM3_CH1 | PB4 | D5 | "Y" | cmd_y |
+| TIM3_CH2 | PB5 | D4 | "X" | cmd_z |
 
 **Note:** PB4 = D5 and PB5 = D4. The Arduino header numbering does *not* match the
 STM32 port numbering. This was confirmed by observation, not assumed.
 
-**IMU axis correspondence is not yet determined.** It depends on the flight computer's
-mounting orientation in the airframe, which is not yet fixed. Constants are named after
-the *mount* axes (MX, MY) deliberately until that is settled.
+## Board Moutning Configuration
+
+*** Mount the flight computer such that the +Y arrow on the IMU is pointing in-plane with the 
+X axis servo. Mount such that the IMU +Y is pointing from the servo toward the rocket motor.
+This will ensure the Y-Axis servo controls err_y via cmd_y ***
 
 ---
 
@@ -170,7 +172,6 @@ additional authority while staying inside the verified-linear region.
 
 ## Open items
 
-- [ ] IMU axis ↔ mount axis correspondence (depends on flight computer mounting orientation)
 - [ ] **Actuation sign check** — does positive `cmd` produce a deflection that *corrects*
       the error, or worsen it? Must be verified by hand before flight. This is the single
       most dangerous remaining unknown in the control loop.
