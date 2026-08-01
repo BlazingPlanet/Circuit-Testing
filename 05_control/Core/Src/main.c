@@ -93,6 +93,8 @@ typedef enum {
 
 #define SERVO_MY_SIGN   (+1.0f) // TBD -- verify by hand before flight
 #define SERVO_MX_SIGN   (+1.0f) // TBD -- verify by hand before flight
+
+#define BENCH_TEST 0  // TEMPORARY: force controller active for bench sign check
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -551,8 +553,13 @@ int main(void)
       // --- Control law: only active during BOOST phase ---
       float cmd_y = 0.0f;
       float cmd_z = 0.0f; 
-
+  
+    #if BENCH_TEST
+      if (1) {
+    #else
       if (flight_state == FLIGHT_BOOST) {
+    #endif    
+
         float p_y = Kp_att * err_y;  // Proportional term Y
         float d_y = -Kd_att * wy;    // Derivative term Y
         cmd_y = p_y + d_y;     // command = P+D
@@ -571,6 +578,9 @@ int main(void)
       // --- Mixing: runs every tick, sets servo to trim if not in BOOST ---
       uint16_t pulse_y = gimbal_to_pulse(cmd_y, SERVO_MY_SIGN, SERVO_MY_TRIM, SERVO_MY_USPD, SERVO_MY_MIN, SERVO_MY_MAX);
       uint16_t pulse_z = gimbal_to_pulse(cmd_z, SERVO_MX_SIGN, SERVO_MX_TRIM, SERVO_MX_USPD, SERVO_MX_MIN, SERVO_MX_MAX);
+
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pulse_y);   // y axis servo
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, pulse_z);   // x axis servo
 
       static const char *state_names[] = {"PAD", "BOOST", "COAST", "DESCENT"};
       
