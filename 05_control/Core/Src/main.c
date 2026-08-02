@@ -54,6 +54,20 @@ typedef enum {
   FLIGHT_COAST,
   FLIGHT_DESCENT,
 } FlightState;
+
+typedef struct __attribute__((packed)) {
+  uint32_t t_ms;                  // 4
+  float qw, qx, qy, qz;           // 16
+  float wx, wy, wz;               // 12 (post bias correction, rad/s)
+  float ax_g, ay_g, az_g;         // 12 (raw accel, g)
+  float err_y, err_z;             // 8
+  float    cmd_y, cmd_z;          // 8   (gimbal degrees)
+  uint16_t pulse_y, pulse_z;      // 4   (µs)
+  float    kf_h, kf_v, kf_b;      // 12
+  uint8_t  state;                 // 1
+  uint8_t  flags;                 // 1
+} LogRecord;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -74,6 +88,14 @@ typedef enum {
 #define KF_ACCEL_NOISE 0.15f // m/s^2, accelerometer noise std dev
 #define KF_BIAS_WALK  0.005f  // m/s^2 per sqrt(s), how fast bias drifts
 #define KF_BARO_NOISE  0.40f  // m, barometer noise std dev (I measured this)
+
+// FLAG BITS
+#define LOG_FLAG_SAT_Y     0x01   // cmd_y clamped at MAX_DEFLECT
+#define LOG_FLAG_SAT_Z     0x02   // cmd_z clamped at MAX_DEFLECT
+#define LOG_FLAG_PULSE_Y   0x04   // pulse_y hit µs bound -- should never fire
+#define LOG_FLAG_PULSE_Z   0x08   // pulse_z hit µs bound -- should never fire
+#define LOG_FLAG_NO_TRUST  0x10   // accel trust was zero
+#define LOG_FLAG_OVERRUN   0x20   // loop didn't finish before next tick
 
 // ---- Servo calibration (measured 2026-07-31, 6.75" lever arm) ----
 // Channel map:
@@ -210,10 +232,17 @@ int main(void)
   MX_TIM2_Init();
   MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
+  printf("LogRecord size: %u bytes (expected 78)\r\n", (unsigned)sizeof(LogRecord));
+
   // CS rests HIGH (deselected). Overrides CubeMX's startup LOW
   HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET);
   HAL_GPIO_WritePin(BMP_CS_GPIO_Port, BMP_CS_Pin, GPIO_PIN_SET);
   HAL_Delay(10);
+
+  // Enable DWT cycle counter for loop timing instrumentaion
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 
   uint8_t who_am_i = IMU_ReadRegister(ISM_WHO_AM_I);
   printf("ISM330DHCX IMU WHO_AM_I: 0x%02X (expected: 0x6B)\r\n", who_am_i);
@@ -295,6 +324,9 @@ int main(void)
   uint32_t pass_count = 0;
   float altitude = 0.0f;
 
+  uint32_t worst_cycles = 0;    // longest tick seen, in CPU cycles
+  uint32_t overrun_count = 0;   // ticks that missed their deadline
+
   // Complimentary filter values for altitude/velocity fusion (OLD)
 
   //float h = 0.0f; // fused altitude estimate (m above pad)
@@ -323,6 +355,7 @@ int main(void)
   {
     if (tick_ready) {
       tick_ready = 0;
+      uint32_t t_start = DWT->CYCCNT;
       pass_count++;
 
       uint32_t now = HAL_GetTick();
@@ -585,20 +618,20 @@ int main(void)
       static const char *state_names[] = {"PAD", "BOOST", "COAST", "DESCENT"};
       
       if (pass_count % 10 == 0) {    // 200 Hz / 10 = ~20 lines per second
-        //printf("R:%7.2f P:%7.2f Y:%7.2f | mag:%4.2fg trust:%4.2f alt:%6.2fm  linZ:%6.2f m/s^2\r\n",
-          //roll, pitch, yaw, an_g, trust, altitude, lin_accel_z);
-        //printf("alt:%6.2f  h:%6.2f  v:%6.2f m/s  linZ:%6.2f\r\n",
-             //altitude, h, v, lin_accel_z);
-        //printf("%-7s h:%6.2f v:%6.2f linZ:%6.2f\r\n",
-               //state_names[flight_state], h, v, lin_accel_z);
-        //printf("%-7s h:%6.2f v:%6.2f b:%5.2f | K:%4.2f linZ:%6.2f\r\n",
-              //state_names[flight_state], kf_h, kf_v, kf_b,
-              //p00 / (p00 + KF_BARO_NOISE * KF_BARO_NOISE), lin_accel_z);
         printf("%-7s tilt:%6.2f eY:%6.3f eZ:%6.3f | cy:%6.2f cz:%6.2f | py:%4u pz:%4u\r\n",
                state_names[flight_state], tilt, err_y, err_z, cmd_y, cmd_z, pulse_y, pulse_z);      
       }
-    }
 
+      // --- Loop timing instrumentation ---
+      uint32_t t_elapsed = DWT->CYCCNT - t_start;
+      if (t_elapsed > worst_cycles) worst_cycles = t_elapsed;
+      if (tick_ready) overrun_count++;
+
+      if (pass_count % 200 == 0) {   // once per second
+        printf(" [timing] worst:%lu us  overruns:%lu\r\n",
+               (unsigned long)(worst_cycles / 84), (unsigned long)overrun_count);
+      }
+    }   
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
