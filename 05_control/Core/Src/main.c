@@ -49,7 +49,8 @@ typedef struct {
 } BMP280_Calib;
 
 typedef enum {
-  FLIGHT_PAD = 0,
+  FLIGHT_DISARMED = 0,
+  FLIGHT_PAD,
   FLIGHT_BOOST,
   FLIGHT_COAST,
   FLIGHT_DESCENT,
@@ -80,11 +81,21 @@ typedef struct __attribute__((packed)) {
 #define ACCEL_SENS_8G 0.244f // milli g's per count (+-8g range)
 #define GYRO_SENS_1000DPS 35.0f // milli dps per count (+-1000 dps range)
 #define GRAVITY 9.80665f // m/s^2
+
+// Flight state machine thresholds
+
 #define LAUNCH_ACCEL_THRESH 15.0f // m/s^2, well above noise. replace with expected launch accel from Open Rocket
 #define BURNOUT_ACCEL_THRESH 5.0f // m/s^2, thrust gone
 #define APOGEE_VEL_THRESH -2.0f // m/s, definitively descending
 #define DEBOUNCE_PASSES 20 // 20 passes at 200 Hz = 100ms
 #define SIM_MODE 0  // 1 = synthetic flight profile, 0 = real sensors
+
+#define ARM_TILT_MAX     35.0f  // degrees from vertical
+#define ARM_GYRO_MAX     0.25f  // rad/s, any axis, must be below to enter armed state
+#define ARM_ACCEL_BAND   0.30f  // g, deviation from 1.0g must be below to enter armed state
+#define ARM_HOLD_PASSES  6000   // 30s hold time
+
+// Kalman filter parameters
 #define KF_ACCEL_NOISE 0.15f // m/s^2, accelerometer noise std dev
 #define KF_BIAS_WALK  0.005f  // m/s^2 per sqrt(s), how fast bias drifts
 #define KF_BARO_NOISE  0.40f  // m, barometer noise std dev (I measured this)
@@ -335,8 +346,9 @@ int main(void)
   //const float Kh = 0.30f; // how hard baro pulls the altitude estimate
   //const float Kv = 0.60f; // how hard baro pulls the velocity estimate
 
-  FlightState flight_state = FLIGHT_PAD;
+  FlightState flight_state = FLIGHT_DISARMED;
   uint16_t debounce_count = 0;
+  uint32_t arm_count = 0;
 
   // --- Kalman state ---
   float kf_h = 0.0f;   // altitude estimate (m)
@@ -557,6 +569,22 @@ int main(void)
       // -- Flight State Machine --
       switch (flight_state) {
 
+        case FLIGHT_DISARMED: 
+          float gyro_mag = sqrtf(wx*wx + wy*wy + wz*wz);
+          int still = (gyro_mag < ARM_GYRO_MAX) && (g_err < ARM_ACCEL_BAND);
+          int upright = (tilt < ARM_TILT_MAX);
+
+          if (still && upright) {
+            arm_count++;
+            if (arm_count >= ARM_HOLD_PASSES) {
+              flight_state = FLIGHT_PAD;
+              printf("*** ARMED ***\r\n");
+            }
+          } else {
+            arm_count = 0;
+          }
+          break;
+        
         case FLIGHT_PAD:
           if (lin_accel_z > LAUNCH_ACCEL_THRESH) {
             debounce_count++;
@@ -632,7 +660,7 @@ int main(void)
       __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pulse_y);   // y axis servo
       __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, pulse_z);   // x axis servo
 
-      static const char *state_names[] = {"PAD", "BOOST", "COAST", "DESCENT"};
+      static const char *state_names[] = {"DISARM", "PAD", "BOOST", "COAST", "DESCENT"};
       
       if (pass_count % 10 == 0) {    // 200 Hz / 10 = ~20 lines per second
           printf("%-7s tilt:%6.2f eY:%6.3f eZ:%6.3f | cy:%6.2f cz:%6.2f | py:%4u pz:%4u | nan:%lu\r\n",
