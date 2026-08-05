@@ -18,7 +18,6 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "stm32f4xx_hal_tim.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -673,10 +672,10 @@ int main(void)
       if (t_elapsed > worst_cycles) worst_cycles = t_elapsed;
       if (tick_ready) overrun_count++;
 
-      //if (pass_count % 200 == 0) {   // once per second
-        //printf(" [timing] worst:%lu us  overruns:%lu\r\n",
-               //(unsigned long)(worst_cycles / 84), (unsigned long)overrun_count);
-      //}
+      if (pass_count % 200 == 0) {   // once per second
+        printf(" [timing] worst:%lu us  overruns:%lu\r\n",
+               (unsigned long)(worst_cycles / 84), (unsigned long)overrun_count);
+      }
     }   
     /* USER CODE END WHILE */
 
@@ -884,7 +883,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
+  huart2.Init.BaudRate = 921600;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
