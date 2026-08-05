@@ -326,6 +326,7 @@ int main(void)
 
   uint32_t worst_cycles = 0;    // longest tick seen, in CPU cycles
   uint32_t overrun_count = 0;   // ticks that missed their deadline
+  uint32_t nan_count = 0;       // NaN resets encountered (should be zero)
 
   // Complimentary filter values for altitude/velocity fusion (OLD)
 
@@ -472,6 +473,14 @@ int main(void)
 
       q = quat_integrate(q, wx, wy, wz, dt);
 
+      // NaN guard: a NaN quaternion is unrecoverable and defeats every
+      // downstream clamp (all NaN comparisons are false). Reset and let the
+      // Mahony filter re-converge from the accelerometer.
+      if (isnan(q.w) || isnan(q.x) || isnan(q.y) || isnan(q.z)) {
+        q.w = 1.0f; q.x = 0.0f; q.y = 0.0f; q.z = 0.0f;
+        bx = 0.0f; by = 0.0f; bz = 0.0f;   // bias accumulated against bad attitude, reset it
+        nan_count++;
+      }
       // Attitude error for control
       float tilt, err_y, err_z;
       attitude_tilt(q, &tilt, &err_y, &err_z);
@@ -535,6 +544,14 @@ int main(void)
 
         p00 = n00; p01 = n01; p02 = n02;
         p11 = n11; p12 = n12; p22 = n22;
+      }
+
+      // NaN guard on the vertical channel
+      if (isnan(kf_h) || isnan(kf_v) || isnan(kf_b)) {
+        kf_h = 0.0f; kf_v = 0.0f; kf_b = 0.0f;
+        p00 = 1.0f; p01 = 0.0f; p02 = 0.0f;
+        p11 = 1.0f; p12 = 0.0f; p22 = 1.0f;
+        nan_count++;
       }
 
       // -- Flight State Machine --
@@ -618,8 +635,9 @@ int main(void)
       static const char *state_names[] = {"PAD", "BOOST", "COAST", "DESCENT"};
       
       if (pass_count % 10 == 0) {    // 200 Hz / 10 = ~20 lines per second
-        printf("%-7s tilt:%6.2f eY:%6.3f eZ:%6.3f | cy:%6.2f cz:%6.2f | py:%4u pz:%4u\r\n",
-               state_names[flight_state], tilt, err_y, err_z, cmd_y, cmd_z, pulse_y, pulse_z);      
+          printf("%-7s tilt:%6.2f eY:%6.3f eZ:%6.3f | cy:%6.2f cz:%6.2f | py:%4u pz:%4u | nan:%lu\r\n",
+                 state_names[flight_state], tilt, err_y, err_z, cmd_y, cmd_z,
+                 pulse_y, pulse_z, (unsigned long)nan_count);      
       }
 
       // --- Loop timing instrumentation ---
@@ -627,10 +645,10 @@ int main(void)
       if (t_elapsed > worst_cycles) worst_cycles = t_elapsed;
       if (tick_ready) overrun_count++;
 
-      if (pass_count % 200 == 0) {   // once per second
-        printf(" [timing] worst:%lu us  overruns:%lu\r\n",
-               (unsigned long)(worst_cycles / 84), (unsigned long)overrun_count);
-      }
+      //if (pass_count % 200 == 0) {   // once per second
+        //printf(" [timing] worst:%lu us  overruns:%lu\r\n",
+               //(unsigned long)(worst_cycles / 84), (unsigned long)overrun_count);
+      //}
     }   
     /* USER CODE END WHILE */
 
