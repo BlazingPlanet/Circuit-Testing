@@ -662,18 +662,29 @@ int main(void)
       __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pulse_y);   // y axis servo
       __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, pulse_z);   // x axis servo
 
+      // --- Log flags for this tick ---
+      uint8_t flags = 0;
+      if (cmd_y >= MAX_DEFLECT || cmd_y <= -MAX_DEFLECT) flags |= LOG_FLAG_SAT_Y;
+      if (cmd_z >= MAX_DEFLECT || cmd_z <= -MAX_DEFLECT) flags |= LOG_FLAG_SAT_Z;
+      if (pulse_y == SERVO_MY_MIN || pulse_y == SERVO_MY_MAX) flags |= LOG_FLAG_PULSE_Y;
+      if (pulse_z == SERVO_MX_MIN || pulse_z == SERVO_MX_MAX) flags |= LOG_FLAG_PULSE_Z;
+      if (trust == 0.0f) flags |= LOG_FLAG_NO_TRUST;
+
       static const char *state_names[] = {"DISARM", "PAD", "BOOST", "COAST", "DESCENT"};
       
       if (pass_count % 10 == 0) {    // 200 Hz / 10 = ~20 lines per second
-          printf("%-7s tilt:%6.2f eY:%6.3f eZ:%6.3f | cy:%6.2f cz:%6.2f | py:%4u pz:%4u | nan:%lu\r\n",
-                 state_names[flight_state], tilt, err_y, err_z, cmd_y, cmd_z,
-                 pulse_y, pulse_z, (unsigned long)nan_count);      
+              printf("%-7s tilt:%6.2f eY:%6.3f eZ:%6.3f | cy:%6.2f cz:%6.2f | py:%4u pz:%4u | f:%02X\r\n",
+               state_names[flight_state], tilt, err_y, err_z, cmd_y, cmd_z,
+               pulse_y, pulse_z, flags);     
       }
 
       // --- Loop timing instrumentation ---
       uint32_t t_elapsed = DWT->CYCCNT - t_start;
       if (t_elapsed > worst_cycles) worst_cycles = t_elapsed;
-      if (tick_ready) overrun_count++;
+      if (tick_ready) {
+        overrun_count++;
+        flags |= LOG_FLAG_OVERRUN;
+      }
 
       if (pass_count % 200 == 0) {   // once per second
         printf(" [timing] worst:%lu us  overruns:%lu\r\n",
@@ -1288,7 +1299,7 @@ void Error_Handler(void)
   // servos would otherwise hold their last commanded deflection forever
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, SERVO_MY_TRIM);   // y axis servo
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, SERVO_MX_TRIM);   // x axis servo
-  
+
   __disable_irq();
   while (1)
   {
