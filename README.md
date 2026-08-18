@@ -1,7 +1,7 @@
 # Circuit-Testing
 Learning circuits with LED's, servos, IMU's, and Barometers
 
-Hardware:
+**Hardware:**
 - Board: STM Nucleo-F446RE
 - IMU: ISM330DHCX
 - Barometer: BMP280
