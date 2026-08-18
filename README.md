@@ -6,5 +6,6 @@ Learning circuits with LED's, servos, IMU's, and Barometers
 - IMU: ISM330DHCX
 - Barometer: BMP280
 - Flash Chip: SPI Flash W25Q128
+- Servos: SG90 9g Servo
 
 This setup is to prototype TVC flight software
