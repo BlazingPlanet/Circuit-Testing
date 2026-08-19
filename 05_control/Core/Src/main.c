@@ -130,6 +130,8 @@ typedef struct __attribute__((packed)) {
 // SPI Timeouts
 #define SPI_TIMEOUT_MS  10 // ms
 
+// Flash Chip
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -209,6 +211,8 @@ void Flash_WaitBusy(void);
 void Flash_WriteEnable(void);
 void Flash_PageProgram(uint32_t addr, const uint8_t *data, uint16_t len);
 void Flash_SectorErase(uint32_t addr);
+void Flash_Dump(void);
+void Flash_EraseLog(void);
 
 // Control Functions
 static uint16_t gimbal_to_pulse(float cmd_deg, float sign, uint16_t trim, float us_per_deg, uint16_t min_us, uint16_t max_us);
@@ -279,27 +283,29 @@ int main(void)
   printf("W25Q128 JEDEC: %02X %02X %02X (expected EF 40 18)\r\n",
          jedec[0], jedec[1], jedec[2]);
 
-  uint8_t rd[16];
-  Flash_Read(0x000000, rd, 16);
-  printf("Flash @0x000000:");
-  for (int i = 0; i < 16; i++) printf(" %02X", rd[i]);
-  printf("\r\n");
 
-  uint8_t test[4] = {0xDE, 0xAD, 0xBE, 0xEF};
-  Flash_PageProgram(0x000000, test, 4);
-  Flash_Read(0x000000, rd, 16);
-  printf("After write:   ");
-  for (int i = 0; i < 16; i++) printf(" %02X", rd[i]);
-  printf("\r\n");
+  // Ground utility menu. Times out into flight mode after 3 s.
+  printf("Press 'd' to dump, 'e' to erase, any other key to fly...\r\n");
+  uint8_t ch;
+  if (HAL_UART_Receive(&huart2, &ch, 1, 3000) == HAL_OK) {
+    if (ch == 'd' || ch == 'D') {
+      Flash_Dump();
+      printf("Dump complete. Reset to continue.\r\n");
+      while (1) { }
+    } else if (ch == 'e' || ch == 'E') {
+      printf("Erase all flight data? Press 'y' to confirm.\r\n");
+      uint8_t confirm;
+      if (HAL_UART_Receive(&huart2, &confirm, 1, 10000) == HAL_OK &&
+          (confirm == 'y' || confirm == 'Y')) {
+        Flash_EraseLog();
+      } else {
+        printf("Erase cancelled.\r\n");
+      }
+      printf("Reset to continue.\r\n");
+      while (1) { }
+    }
+  }
 
-  uint32_t t0 = HAL_GetTick();
-  Flash_SectorErase(0x000000);
-  printf("Erase took %lu ms\r\n", (unsigned long)(HAL_GetTick() - t0));
-
-  Flash_Read(0x000000, rd, 16);
-  printf("After erase:   ");
-  for (int i = 0; i < 16; i++) printf(" %02X", rd[i]);
-  printf("\r\n");
 
   BMP280_ReadCalibration();
   printf("dig_T1 = %u  dig_P1 = %u\r\n", calib.dig_T1, calib.dig_P1);
@@ -609,7 +615,7 @@ int main(void)
       // -- Flight State Machine --
       switch (flight_state) {
 
-        case FLIGHT_DISARMED: 
+        case FLIGHT_DISARMED: {
           float gyro_mag = sqrtf(wx*wx + wy*wy + wz*wz);
           int still = (gyro_mag < ARM_GYRO_MAX) && (g_err < ARM_ACCEL_BAND);
           int upright = (tilt < ARM_TILT_MAX);
@@ -624,6 +630,7 @@ int main(void)
             arm_count = 0;
           }
           break;
+        }
         
         case FLIGHT_PAD:
           if (lin_accel_z > LAUNCH_ACCEL_THRESH) {
@@ -1394,6 +1401,63 @@ void Flash_SectorErase(uint32_t addr)
   HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_SET);
 
   Flash_WaitBusy();
+}
+
+// Dump flash contents as hex over serial. Stops at the first fully
+// erased page. Blocking and slow -- ground use only.
+void Flash_Dump(void)
+{
+  uint8_t buf[256];
+  uint32_t addr = 0;
+
+  printf("---FLASH DUMP BEGIN---\r\n");
+
+  while (addr < 0x1000000) {          // 16 MB
+    Flash_Read(addr, buf, 256);
+
+    // Check for a fully erased page -- end of data
+    int erased = 1;
+    for (int i = 0; i < 256; i++) {
+      if (buf[i] != 0xFF) { erased = 0; break; }
+    }
+    if (erased) break;
+
+    for (int i = 0; i < 256; i++) printf("%02X", buf[i]);
+    printf("\r\n");
+
+    addr += 256;
+  }
+
+  printf("---FLASH DUMP END--- %lu bytes\r\n", (unsigned long)addr);
+}
+
+// Erase sectors from 0 until the first already-erased sector.
+// Only clears what was written -- much faster than a full chip erase.
+void Flash_EraseLog(void)
+{
+  uint8_t buf[16];
+  uint32_t addr = 0;
+  uint32_t count = 0;
+  uint32_t t0 = HAL_GetTick();
+
+  printf("Erasing...\r\n");
+
+  while (addr < 0x1000000) {
+    Flash_Read(addr, buf, 16);
+
+    int erased = 1;
+    for (int i = 0; i < 16; i++) {
+      if (buf[i] != 0xFF) { erased = 0; break; }
+    }
+    if (erased) break;
+
+    Flash_SectorErase(addr);
+    addr += 4096;
+    count++;
+  }
+
+  printf("Erased %lu sectors in %lu ms\r\n",
+         (unsigned long)count, (unsigned long)(HAL_GetTick() - t0));
 }
 
 // Synthetic vertical acceleration
