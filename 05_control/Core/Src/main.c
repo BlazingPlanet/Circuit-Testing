@@ -203,6 +203,12 @@ float sim_lin_accel_z(float t);
 
 // Flash Chip Functions
 void Flash_ReadJEDEC(uint8_t *buf);
+void Flash_Read(uint32_t addr, uint8_t *buf, uint16_t len);
+uint8_t Flash_ReadStatus(void);
+void Flash_WaitBusy(void);
+void Flash_WriteEnable(void);
+void Flash_PageProgram(uint32_t addr, const uint8_t *data, uint16_t len);
+void Flash_SectorErase(uint32_t addr);
 
 // Control Functions
 static uint16_t gimbal_to_pulse(float cmd_deg, float sign, uint16_t trim, float us_per_deg, uint16_t min_us, uint16_t max_us);
@@ -267,9 +273,33 @@ int main(void)
   uint8_t BMP280_ID = BMP280_ReadRegister(0xD0); // Read the chip ID register
   printf("BMP280 Chip ID: 0x%02X (expected: 0x58)\r\n", BMP280_ID); // Print the chip ID to UART
 
+  // --- W25Q128 flash bring-up test ---
   uint8_t jedec[3];
   Flash_ReadJEDEC(jedec);
-  printf("W25Q128 JEDEC: %02X %02X %02X (expected EF 40 18)\r\n", jedec[0], jedec[1], jedec[2]);
+  printf("W25Q128 JEDEC: %02X %02X %02X (expected EF 40 18)\r\n",
+         jedec[0], jedec[1], jedec[2]);
+
+  uint8_t rd[16];
+  Flash_Read(0x000000, rd, 16);
+  printf("Flash @0x000000:");
+  for (int i = 0; i < 16; i++) printf(" %02X", rd[i]);
+  printf("\r\n");
+
+  uint8_t test[4] = {0xDE, 0xAD, 0xBE, 0xEF};
+  Flash_PageProgram(0x000000, test, 4);
+  Flash_Read(0x000000, rd, 16);
+  printf("After write:   ");
+  for (int i = 0; i < 16; i++) printf(" %02X", rd[i]);
+  printf("\r\n");
+
+  uint32_t t0 = HAL_GetTick();
+  Flash_SectorErase(0x000000);
+  printf("Erase took %lu ms\r\n", (unsigned long)(HAL_GetTick() - t0));
+
+  Flash_Read(0x000000, rd, 16);
+  printf("After erase:   ");
+  for (int i = 0; i < 16; i++) printf(" %02X", rd[i]);
+  printf("\r\n");
 
   BMP280_ReadCalibration();
   printf("dig_T1 = %u  dig_P1 = %u\r\n", calib.dig_T1, calib.dig_P1);
@@ -1279,6 +1309,7 @@ static uint16_t gimbal_to_pulse(float cmd_deg, float sign, uint16_t trim, float 
 }
 
 // Flash Chip Functions
+
 // Read the 3-byte JEDEC ID: manufacturer, memory type, capacity
 // W25128JV should return EF 40 18
 void Flash_ReadJEDEC(uint8_t *buf)
@@ -1289,6 +1320,80 @@ void Flash_ReadJEDEC(uint8_t *buf)
   HAL_SPI_Transmit(&hspi1, &cmd, 1, SPI_TIMEOUT_MS); // send command
   HAL_SPI_Receive(&hspi1, buf, 3, SPI_TIMEOUT_MS); // read 3 bytes
   HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_SET); // CS high
+}
+
+void Flash_Read(uint32_t addr, uint8_t *buf, uint16_t len)
+{
+  uint8_t cmd[4];
+  cmd[0] = 0x03; // Read command
+  cmd[1] = (addr >> 16) & 0xFF; // Address byte 1
+  cmd[2] = (addr >> 8) & 0xFF;  // Address byte 2
+  cmd[3] = addr & 0xFF;         // Address byte 3
+
+  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_RESET); // CS low
+  HAL_SPI_Transmit(&hspi1, cmd, 4, SPI_TIMEOUT_MS); // send command and address
+  HAL_SPI_Receive(&hspi1, buf, len, SPI_TIMEOUT_MS); // read data
+  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_SET); // CS high
+}
+
+uint8_t Flash_ReadStatus(void)
+{
+  uint8_t cmd = 0x05, status = 0;
+  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_RESET);
+  HAL_SPI_Transmit(&hspi1, &cmd, 1, SPI_TIMEOUT_MS);
+  HAL_SPI_Receive(&hspi1, &status, 1, SPI_TIMEOUT_MS);
+  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_SET);
+  return status;
+}
+
+void Flash_WaitBusy(void)
+{
+  while (Flash_ReadStatus() & 0x01) { }   // bit 0 = BUSY
+}
+
+void Flash_WriteEnable(void)
+{
+  uint8_t cmd = 0x06;
+  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_RESET);
+  HAL_SPI_Transmit(&hspi1, &cmd, 1, SPI_TIMEOUT_MS);
+  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_SET);
+}
+
+// Write up to 256 bytes. Must not cross a 256-byte page boundary.
+void Flash_PageProgram(uint32_t addr, const uint8_t *data, uint16_t len)
+{
+  uint8_t cmd[4];
+  cmd[0] = 0x02;
+  cmd[1] = (addr >> 16) & 0xFF;
+  cmd[2] = (addr >>  8) & 0xFF;
+  cmd[3] =  addr        & 0xFF;
+
+  Flash_WriteEnable();
+
+  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_RESET);
+  HAL_SPI_Transmit(&hspi1, cmd, 4, SPI_TIMEOUT_MS);
+  HAL_SPI_Transmit(&hspi1, (uint8_t *)data, len, SPI_TIMEOUT_MS);
+  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_SET);
+
+  Flash_WaitBusy();
+}
+
+// Erase the 4 KB sector containing addr. Takes 45-400 ms.
+void Flash_SectorErase(uint32_t addr)
+{
+  uint8_t cmd[4];
+  cmd[0] = 0x20;
+  cmd[1] = (addr >> 16) & 0xFF;
+  cmd[2] = (addr >>  8) & 0xFF;
+  cmd[3] =  addr        & 0xFF;
+
+  Flash_WriteEnable();
+
+  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_RESET);
+  HAL_SPI_Transmit(&hspi1, cmd, 4, SPI_TIMEOUT_MS);
+  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_SET);
+
+  Flash_WaitBusy();
 }
 
 // Synthetic vertical acceleration
