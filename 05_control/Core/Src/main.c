@@ -201,6 +201,9 @@ float pressure_to_altitude(float pressure_pa, float p0_pa);
 float sim_lin_accel_z(float t);
 #endif
 
+// Flash Chip Functions
+void Flash_ReadJEDEC(uint8_t *buf);
+
 // Control Functions
 static uint16_t gimbal_to_pulse(float cmd_deg, float sign, uint16_t trim, float us_per_deg, uint16_t min_us, uint16_t max_us);
                                 
@@ -250,6 +253,7 @@ int main(void)
   // CS rests HIGH (deselected). Overrides CubeMX's startup LOW
   HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET);
   HAL_GPIO_WritePin(BMP_CS_GPIO_Port, BMP_CS_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_SET);
   HAL_Delay(10);
 
   // Enable DWT cycle counter for loop timing instrumentaion
@@ -262,6 +266,10 @@ int main(void)
 
   uint8_t BMP280_ID = BMP280_ReadRegister(0xD0); // Read the chip ID register
   printf("BMP280 Chip ID: 0x%02X (expected: 0x58)\r\n", BMP280_ID); // Print the chip ID to UART
+
+  uint8_t jedec[3];
+  Flash_ReadJEDEC(jedec);
+  printf("W25Q128 JEDEC: %02X %02X %02X (expected EF 40 18)\r\n", jedec[0], jedec[1], jedec[2]);
 
   BMP280_ReadCalibration();
   printf("dig_T1 = %u  dig_P1 = %u\r\n", calib.dig_T1, calib.dig_P1);
@@ -933,10 +941,10 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, FLASH_CS_Pin|BMP_CS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(BMP_CS_GPIO_Port, BMP_CS_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(IMU_CS_GPIO_Port, IMU_CS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -944,19 +952,19 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
+  /*Configure GPIO pins : FLASH_CS_Pin BMP_CS_Pin */
+  GPIO_InitStruct.Pin = FLASH_CS_Pin|BMP_CS_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
   /*Configure GPIO pin : IMU_CS_Pin */
   GPIO_InitStruct.Pin = IMU_CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(IMU_CS_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : BMP_CS_Pin */
-  GPIO_InitStruct.Pin = BMP_CS_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(BMP_CS_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -1268,6 +1276,19 @@ static uint16_t gimbal_to_pulse(float cmd_deg, float sign, uint16_t trim, float 
   if (pulse > (float)max_us) pulse = (float)max_us;
 
   return (uint16_t)(pulse + 0.5f); // round rather than truncate
+}
+
+// Flash Chip Functions
+// Read the 3-byte JEDEC ID: manufacturer, memory type, capacity
+// W25128JV should return EF 40 18
+void Flash_ReadJEDEC(uint8_t *buf)
+{
+  uint8_t cmd = 0x9F; // JEDEC ID command
+
+  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_RESET); // CS low
+  HAL_SPI_Transmit(&hspi1, &cmd, 1, SPI_TIMEOUT_MS); // send command
+  HAL_SPI_Receive(&hspi1, buf, 3, SPI_TIMEOUT_MS); // read 3 bytes
+  HAL_GPIO_WritePin(FLASH_CS_GPIO_Port, FLASH_CS_Pin, GPIO_PIN_SET); // CS high
 }
 
 // Synthetic vertical acceleration
