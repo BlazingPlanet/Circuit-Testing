@@ -131,6 +131,10 @@ typedef struct __attribute__((packed)) {
 #define SPI_TIMEOUT_MS  10 // ms
 
 // Flash Chip
+// Logging
+#define LOG_RECORDS_PER_PAGE  3      // 3 x 78 = 234 bytes, fits a 256-byte page
+#define LOG_STOP_PASSES       6000   // 30 s at 200 Hz after DESCENT
+#define FLASH_SIZE            0x1000000   // 16 MB
 
 /* USER CODE END PD */
 
@@ -413,6 +417,13 @@ int main(void)
   float kf_v = 0.0f;   // velocity estimate (m/s)
   float kf_b = 0.0f;   // accelerometer bias (m/s^2)
 
+  // --- Logging state ---
+  uint8_t  log_buf[256];
+  uint8_t  log_count = 0;        // records currently in log_buf
+  uint8_t  log_active = 0;       // 1 = logging
+  uint32_t log_stop_count = 0;   // passes since entering DESCENT
+  for (int i = 0; i < 256; i++) log_buf[i] = 0xFF;
+
   // Covariance, symmetric 3x3 (six unique terms)
   float p00 = 1.0f,  p01 = 0.0f,  p02 = 0.0f;
   float p11 = 1.0f,  p12 = 0.0f;
@@ -686,6 +697,15 @@ int main(void)
         case FLIGHT_DESCENT:
           break;
       }
+
+      // Logging starts when the vehicle arms, stops 30 s after apogee.
+      if (flight_state == FLIGHT_PAD && !log_active && log_stop_count == 0) {
+        log_active = 1;
+      }
+      if (flight_state == FLIGHT_DESCENT) {
+        log_stop_count++;
+        if (log_stop_count >= LOG_STOP_PASSES) log_active = 0;
+      }
       
       // --- Control law: only active during BOOST phase ---
       float cmd_y = 0.0f;
@@ -746,6 +766,28 @@ int main(void)
       if (pass_count % 200 == 0) {   // once per second
         printf(" [timing] worst:%lu us  overruns:%lu\r\n",
                (unsigned long)(worst_cycles / 84), (unsigned long)overrun_count);
+      }
+
+      if (log_active && log_addr + 256 <= FLASH_SIZE) {
+        LogRecord *r = (LogRecord *)(log_buf + log_count * sizeof(LogRecord));
+        r->t_ms   = now;
+        r->qw = q.w; r->qx = q.x; r->qy = q.y; r->qz = q.z;
+        r->wx = wx;  r->wy = wy;  r->wz = wz;
+        r->ax_g = ax_g; r->ay_g = ay_g; r->az_g = az_g;
+        r->err_y = err_y; r->err_z = err_z;
+        r->cmd_y = cmd_y; r->cmd_z = cmd_z;
+        r->pulse_y = pulse_y; r->pulse_z = pulse_z;
+        r->kf_h = kf_h; r->kf_v = kf_v; r->kf_b = kf_b;
+        r->state = (uint8_t)flight_state;
+        r->flags = flags;
+
+        log_count++;
+        if (log_count >= LOG_RECORDS_PER_PAGE) {
+          Flash_PageProgram(log_addr, log_buf, 256);
+          log_addr += 256;
+          log_count = 0;
+          for (int i = 0; i < 256; i++) log_buf[i] = 0xFF;
+        }
       }
     }   
     /* USER CODE END WHILE */
