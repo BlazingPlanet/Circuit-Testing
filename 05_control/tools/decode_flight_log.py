@@ -504,12 +504,74 @@ def plot_detail(data, title):
 # 3D orientation replay
 # ---------------------------------------------------------------------------
 
+def make_rocket_mesh(n_sides=12):
+    """Build a simple rocket body in the BODY frame.
+
+    Body +X is the nose axis, matching the firmware's convention, so the model
+    is a tube along +X with a cone at the front and fins at the back.
+
+    Returns (verts, faces, colors):
+      verts  -- (N,3) array of vertices, body frame
+      faces  -- list of index lists, one per polygon
+      colors -- one colour per face
+
+    Vertices are stored as one flat array so the whole model can be rotated
+    with a single quat_rotate() call per frame; the face lists just index
+    into the rotated result.
+    """
+    verts = []
+    faces = []
+    colors = []
+
+    def add(x, y, z):
+        verts.append([x, y, z])
+        return len(verts) - 1
+
+    R = 0.10             # body radius
+    tail_x = -0.55       # aft end
+    shoulder_x = 0.35    # where the nose cone starts
+    tip_x = 0.85         # nose tip
+
+    ang = np.linspace(0, 2 * np.pi, n_sides, endpoint=False)
+    cy, cz = R * np.cos(ang), R * np.sin(ang)
+
+    # Rings of vertices at the tail and at the base of the nose cone.
+    tail_ring = [add(tail_x, cy[i], cz[i]) for i in range(n_sides)]
+    shldr_ring = [add(shoulder_x, cy[i], cz[i]) for i in range(n_sides)]
+    tip = add(tip_x, 0.0, 0.0)
+
+    # Body tube: one quad per side.
+    for i in range(n_sides):
+        j = (i + 1) % n_sides
+        faces.append([tail_ring[i], tail_ring[j], shldr_ring[j], shldr_ring[i]])
+        colors.append("#d8d8dc")
+
+    # Nose cone: one triangle per side, all meeting at the tip. Deliberately
+    # not red -- the body +X arrow is red, and having both the same colour
+    # made it hard to tell the model from the axis overlay.
+    for i in range(n_sides):
+        j = (i + 1) % n_sides
+        faces.append([shldr_ring[i], shldr_ring[j], tip])
+        colors.append("#e8a33d")
+
+    # Tail cap, so the model isn't hollow when viewed from behind. Dark, so
+    # it reads as the nozzle end at a glance.
+    faces.append(tail_ring)
+    colors.append("#3d3d42")
+
+    # No fins: this vehicle is finless and statically unstable, relying
+    # entirely on thrust vectoring for attitude control.
+
+    return np.array(verts), faces, colors
+
+
 def plot_replay(data, title, decimate=10):
     """Animated 3D replay of the vehicle's attitude.
 
-    Draws the rocket as a body-frame axis triad -- the nose (body +X) plus the
-    two lateral axes -- rotated into the world frame at each sample. A trailing
-    ghost of recent nose directions shows where it has been.
+    Draws a solid rocket body rotated by the logged quaternion, with the
+    body-frame axis triad overlaid on top. The triad matters even with the
+    model present: the rocket body is rotationally symmetric, so it can't
+    show roll on its own -- the green and blue arrows can.
 
     'decimate' skips frames: at 200 Hz, every 10th sample gives 20 fps, which
     plays back at roughly real time and keeps the animation responsive.
@@ -520,6 +582,7 @@ def plot_replay(data, title, decimate=10):
     would gimbal-lock right where you most want to see what happened.
     """
     from matplotlib.animation import FuncAnimation
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
     q = np.column_stack([data["qw"], data["qx"], data["qy"], data["qz"]])
     q = q[::decimate]
@@ -532,6 +595,8 @@ def plot_replay(data, title, decimate=10):
     nose = quat_rotate(q, np.tile([1.0, 0.0, 0.0], (n, 1)))   # body +X
     lat_y = quat_rotate(q, np.tile([0.0, 1.0, 0.0], (n, 1)))  # body +Y
     lat_z = quat_rotate(q, np.tile([0.0, 0.0, 1.0], (n, 1)))  # body +Z
+
+    verts, faces, colors = make_rocket_mesh()
 
     fig = plt.figure(figsize=(9, 8))
     ax = fig.add_subplot(111, projection="3d")
@@ -550,21 +615,28 @@ def plot_replay(data, title, decimate=10):
         setup_axes()
 
         # World vertical, for reference -- the attitude the controller wants.
-        ax.plot([0, 0], [0, 0], [0, 1.1], color="0.6", ls="--", lw=1.0)
+        ax.plot([0, 0], [0, 0], [0, 1.15], color="0.6", ls="--", lw=1.0)
 
-        # The nose, drawn long and thick since it's the axis that matters.
-        ax.quiver(0, 0, 0, *nose[i], color="tab:red", lw=3.0,
-                  arrow_length_ratio=0.15)
-        # Lateral axes, drawn short -- they show roll orientation.
-        ax.quiver(0, 0, 0, *(lat_y[i] * 0.5), color="tab:green", lw=1.5,
-                  arrow_length_ratio=0.2)
-        ax.quiver(0, 0, 0, *(lat_z[i] * 0.5), color="tab:blue", lw=1.5,
-                  arrow_length_ratio=0.2)
+        # Rotate every vertex of the model in one shot, then hand the polygons
+        # to matplotlib by indexing into the rotated array.
+        rot = quat_rotate(np.tile(q[i], (len(verts), 1)), verts)
+        polys = [rot[idx] for idx in faces]
+        ax.add_collection3d(Poly3DCollection(
+            polys, facecolors=colors, edgecolors="#00000030", linewidths=0.4))
+
+        # Axis triad over the body, so the frame stays legible. The nose arrow
+        # runs slightly past the tip; the lateral arrows are short.
+        ax.quiver(0, 0, 0, *(nose[i] * 1.05), color="tab:red", lw=2.0,
+                  arrow_length_ratio=0.12, alpha=0.8)
+        ax.quiver(0, 0, 0, *(lat_y[i] * 0.45), color="tab:green", lw=1.4,
+                  arrow_length_ratio=0.2, alpha=0.8)
+        ax.quiver(0, 0, 0, *(lat_z[i] * 0.45), color="tab:blue", lw=1.4,
+                  arrow_length_ratio=0.2, alpha=0.8)
 
         # Trail of recent nose positions -- makes coning or tumbling obvious.
         lo = max(0, i - 60)
         if i > lo:
-            trail = nose[lo:i + 1]
+            trail = nose[lo:i + 1] * 1.05
             ax.plot(trail[:, 0], trail[:, 1], trail[:, 2],
                     color="tab:red", alpha=0.35, lw=1.0)
 
