@@ -213,6 +213,8 @@ void Flash_PageProgram(uint32_t addr, const uint8_t *data, uint16_t len);
 void Flash_SectorErase(uint32_t addr);
 void Flash_Dump(void);
 void Flash_EraseLog(void);
+static uint32_t Flash_FindEndSector(void);
+uint32_t Flash_FindWriteAddr(void);
 
 // Control Functions
 static uint16_t gimbal_to_pulse(float cmd_deg, float sign, uint16_t trim, float us_per_deg, uint16_t min_us, uint16_t max_us);
@@ -305,7 +307,17 @@ int main(void)
       while (1) { }
     }
   }
+  
+  // Test Pattern
+  //uint8_t pattern[16];
+  //for (int i = 0; i < 16; i++) pattern[i] = 0xA0 + i;
+  //Flash_PageProgram(0x000000, pattern, 16);
 
+  uint32_t t_find = HAL_GetTick();
+  uint32_t log_addr = Flash_FindWriteAddr();
+  printf("Log write pointer: 0x%06lX (%lu KB used, %lu ms)\r\n",
+         (unsigned long)log_addr, (unsigned long)(log_addr / 1024),
+         (unsigned long)(HAL_GetTick() - t_find));
 
   BMP280_ReadCalibration();
   printf("dig_T1 = %u  dig_P1 = %u\r\n", calib.dig_T1, calib.dig_P1);
@@ -1458,6 +1470,56 @@ void Flash_EraseLog(void)
 
   printf("Erased %lu sectors in %lu ms\r\n",
          (unsigned long)count, (unsigned long)(HAL_GetTick() - t0));
+}
+
+// Find the first erased 4 KB sector. Data is contiguous from address 0,
+// so "is this sector erased" is monotonic -- false below the boundary,
+// true above -- which is what makes binary search valid.
+static uint32_t Flash_FindEndSector(void)
+{
+  uint32_t lo = 0;                  // known written (or the chip is empty)
+  uint32_t hi = 4096;               // 16 MB / 4 KB, one past the last sector
+
+  while (lo < hi) {
+    uint32_t mid = lo + (hi - lo) / 2;
+    uint8_t buf[16];
+    Flash_Read(mid * 4096, buf, 16);
+
+    int erased = 1;
+    for (int i = 0; i < 16; i++) {
+      if (buf[i] != 0xFF) { erased = 0; break; }
+    }
+
+    if (erased) hi = mid;           // boundary is at or below mid
+    else        lo = mid + 1;       // boundary is above mid
+  }
+
+  return lo;                        // index of the first erased sector
+}
+
+// Find the next free write address: the first erased page.
+uint32_t Flash_FindWriteAddr(void)
+{
+  uint32_t sector = Flash_FindEndSector();
+
+  if (sector == 0) return 0;        // chip is empty
+
+  // The boundary is inside the previous sector -- scan its 16 pages
+  uint32_t base = (sector - 1) * 4096;
+
+  for (int p = 0; p < 16; p++) {
+    uint32_t addr = base + p * 256;
+    uint8_t buf[16];
+    Flash_Read(addr, buf, 16);
+
+    int erased = 1;
+    for (int i = 0; i < 16; i++) {
+      if (buf[i] != 0xFF) { erased = 0; break; }
+    }
+    if (erased) return addr;
+  }
+
+  return sector * 4096;             // previous sector fully written
 }
 
 // Synthetic vertical acceleration
