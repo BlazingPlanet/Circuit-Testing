@@ -11,7 +11,10 @@
     cd C:\dev\Circuit-Testing\05_control\tools
     python decode_flight_log.py C:\dev\capture.log
 
-## Options
+## Example Decode for Flight 3 on the Chip:
+    python decode_flight_log.py C:\dev\capture.log --flight 3 --replay
+
+## Options - Can use any combination of these after the decode_flight_log.py call
     --replay            3D orientation animation
     --csv flight.csv    also write CSV
     --flight 2          decode an earlier flight (default: most recent)
