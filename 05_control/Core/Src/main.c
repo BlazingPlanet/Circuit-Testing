@@ -151,6 +151,14 @@ typedef enum {
 #define LOG_STOP_PASSES       3000   // 15 s at 200 Hz after DESCENT
 #define FLASH_SIZE            0x1000000   // 16 MB
 
+// ---- PAD arming indicator ----
+// Both TVC servos wiggle in sequence on entering PAD, so the vehicle can
+// signal "armed, safe to ignite" without a serial connection. Sequential
+// rather than simultaneous so a dead channel is visible.
+#define WIGGLE_DEG          4.0f   // gimbal degrees, well inside MAX_DEFLECT
+#define WIGGLE_STEP_PASSES    60   // 300 ms per step at 200 Hz
+#define WIGGLE_STEPS          10   // Y: +,-,+,-, then Z: +,-,+,-, then center x2
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -450,6 +458,11 @@ int main(void)
   uint32_t eject_timer = 0;        // passes in the current sequence step
   uint32_t boost_passes = 0;       // passes since BOOST entry, for the backup
   uint8_t  eject_by_backup = 0;    // which trigger fired
+
+  // --- PAD wiggle indicator ---
+  uint8_t  wiggle_step = 0;        // 0 = not started
+  uint32_t wiggle_timer = 0;
+  uint8_t  wiggle_done = 0;        // latch -- runs once per boot
 
   // Covariance, symmetric 3x3 (six unique terms)
   float p00 = 1.0f,  p01 = 0.0f,  p02 = 0.0f;
@@ -797,6 +810,34 @@ int main(void)
         if (cmd_y < -MAX_DEFLECT) cmd_y = -MAX_DEFLECT;
         if (cmd_z > MAX_DEFLECT) cmd_z = MAX_DEFLECT;
         if (cmd_z < -MAX_DEFLECT) cmd_z = -MAX_DEFLECT;
+      }
+
+      // --- PAD arming indicator ---
+      // Single-shot wiggle on entering PAD. Gated on PAD specifically, so it
+      // can never override the control law during BOOST.
+      if (flight_state == FLIGHT_PAD && !wiggle_done) {
+        if (wiggle_step == 0) wiggle_step = 1;
+
+        cmd_y = 0.0f;
+        cmd_z = 0.0f;
+
+        switch (wiggle_step) {
+          case 1: cmd_y =  WIGGLE_DEG; break;   // Y channel
+          case 2: cmd_y = -WIGGLE_DEG; break;
+          case 3: cmd_y =  WIGGLE_DEG; break;
+          case 4: cmd_y = -WIGGLE_DEG; break;
+          case 5: break;                        // pause at center
+          case 6: cmd_z =  WIGGLE_DEG; break;   // Z channel
+          case 7: cmd_z = -WIGGLE_DEG; break;
+          case 8: cmd_z =  WIGGLE_DEG; break;
+          case 9: cmd_z = -WIGGLE_DEG; break;
+          default: break;                       // final center
+        }
+
+        if (++wiggle_timer >= WIGGLE_STEP_PASSES) {
+          wiggle_timer = 0;
+          if (++wiggle_step > WIGGLE_STEPS) wiggle_done = 1;
+        }
       }
 
       // --- Mixing: runs every tick, sets servo to trim if not in BOOST ---
