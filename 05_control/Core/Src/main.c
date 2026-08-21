@@ -68,6 +68,13 @@ typedef struct __attribute__((packed)) {
   uint8_t  flags;                 // 1
 } LogRecord;
 
+typedef enum {
+  EJECT_IDLE = 0,   // waiting for a trigger
+  EJECT_KNOCK,      // horn at knock position
+  EJECT_RETURN,     // horn back at armed
+  EJECT_DONE,       // fired, will not fire again
+} EjectState;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -86,12 +93,18 @@ typedef struct __attribute__((packed)) {
 #define BURNOUT_ACCEL_THRESH 5.0f // m/s^2, thrust gone
 #define APOGEE_VEL_THRESH -2.0f // m/s, definitively descending
 #define DEBOUNCE_PASSES 20 // 20 passes at 200 Hz = 100ms
-#define SIM_MODE 0  // 1 = synthetic flight profile, 0 = real sensors
+#define SIM_MODE 0   // 1 = synthetic flight profile, 0 = real sensors
 
 #define ARM_TILT_MAX     35.0f  // degrees from vertical
 #define ARM_GYRO_MAX     0.25f  // rad/s, any axis, must be below to enter armed state
 #define ARM_ACCEL_BAND   0.30f  // g, deviation from 1.0g must be below to enter armed state
 #define ARM_HOLD_PASSES  6000   // 30s hold time
+
+// ---- Recovery ejection (TIM3_CH3, PB0, Arduino A3) ----
+#define EJECT_ARMED_US       2000   // latch engaged, horn clear
+#define EJECT_KNOCK_US        600   // tuned against the latch
+#define EJECT_DWELL_PASSES    100   // 500 ms at 200 Hz
+#define EJECT_BACKUP_PASSES  2400   // 12 s after BOOST -- PLACEHOLDER, set from OpenRocket
 
 // Kalman filter parameters
 #define KF_ACCEL_NOISE 0.15f // m/s^2, accelerometer noise std dev
@@ -105,6 +118,8 @@ typedef struct __attribute__((packed)) {
 #define LOG_FLAG_PULSE_Z   0x08   // pulse_z hit µs bound -- should never fire
 #define LOG_FLAG_NO_TRUST  0x10   // accel trust was zero
 #define LOG_FLAG_OVERRUN   0x20   // loop didn't finish before next tick
+#define LOG_FLAG_EJECT     0x40   // ejection sequence active this tick
+#define LOG_FLAG_EJECT_BAK 0x80   // fired by backup timer, not apogee detection
 
 // ---- Servo calibration (measured 2026-07-31, 6.75" lever arm) ----
 // Channel map:
@@ -133,7 +148,7 @@ typedef struct __attribute__((packed)) {
 // Flash Chip
 // Logging
 #define LOG_RECORDS_PER_PAGE  3      // 3 x 78 = 234 bytes, fits a 256-byte page
-#define LOG_STOP_PASSES       6000   // 30 s at 200 Hz after DESCENT
+#define LOG_STOP_PASSES       3000   // 15 s at 200 Hz after DESCENT
 #define FLASH_SIZE            0x1000000   // 16 MB
 
 /* USER CODE END PD */
@@ -359,6 +374,12 @@ int main(void)
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, SERVO_MY_TRIM);   // y axis servo
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, SERVO_MX_TRIM);   // x axis servo
 
+  // Ejection servo: compare register set BEFORE the channel is enabled, so
+  // the first pulse out of PB0 is the armed position. A window at 1500 would
+  // be a deploy event on the pad.
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, EJECT_ARMED_US);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -423,6 +444,12 @@ int main(void)
   uint8_t  log_active = 0;       // 1 = logging
   uint32_t log_stop_count = 0;   // passes since entering DESCENT
   for (int i = 0; i < 256; i++) log_buf[i] = 0xFF;
+
+  // --- Ejection state ---
+  EjectState eject_state = EJECT_IDLE;
+  uint32_t eject_timer = 0;        // passes in the current sequence step
+  uint32_t boost_passes = 0;       // passes since BOOST entry, for the backup
+  uint8_t  eject_by_backup = 0;    // which trigger fired
 
   // Covariance, symmetric 3x3 (six unique terms)
   float p00 = 1.0f,  p01 = 0.0f,  p02 = 0.0f;
@@ -698,6 +725,46 @@ int main(void)
           break;
       }
 
+      // --- Recovery ejection ---
+      // Primary trigger is the DESCENT transition (apogee). The backup timer
+      // exists because every path to DESCENT runs through launch, burnout,
+      // and apogee detection -- and any one of them failing leaves the
+      // vehicle ballistic with no chute. A late deployment beats none.
+      if (flight_state == FLIGHT_BOOST) boost_passes++;
+
+      int fire_apogee = (flight_state == FLIGHT_DESCENT);
+      int fire_backup = (boost_passes > 0 && boost_passes >= EJECT_BACKUP_PASSES);
+
+      switch (eject_state) {
+        case EJECT_IDLE:
+          if (fire_apogee || fire_backup) {
+            eject_by_backup = (!fire_apogee && fire_backup) ? 1 : 0;
+            __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, EJECT_KNOCK_US);
+            eject_state = EJECT_KNOCK;
+            eject_timer = 0;
+            printf("*** EJECT (%s) ***\r\n",
+                   eject_by_backup ? "backup timer" : "apogee");
+          }
+          break;
+
+        case EJECT_KNOCK:
+          if (++eject_timer >= EJECT_DWELL_PASSES) {
+            __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, EJECT_ARMED_US);
+            eject_state = EJECT_RETURN;
+            eject_timer = 0;
+          }
+          break;
+
+        case EJECT_RETURN:
+          if (++eject_timer >= EJECT_DWELL_PASSES) {
+            eject_state = EJECT_DONE;
+          }
+          break;
+
+        case EJECT_DONE:
+          break;
+      }
+
       // Logging starts when the vehicle arms, stops 30 s after apogee.
       if (flight_state == FLIGHT_PAD && !log_active && log_stop_count == 0) {
         log_active = 1;
@@ -746,6 +813,9 @@ int main(void)
       if (pulse_y == SERVO_MY_MIN || pulse_y == SERVO_MY_MAX) flags |= LOG_FLAG_PULSE_Y;
       if (pulse_z == SERVO_MX_MIN || pulse_z == SERVO_MX_MAX) flags |= LOG_FLAG_PULSE_Z;
       if (trust == 0.0f) flags |= LOG_FLAG_NO_TRUST;
+      if (eject_state == EJECT_KNOCK || eject_state == EJECT_RETURN)
+        flags |= LOG_FLAG_EJECT;
+      if (eject_by_backup) flags |= LOG_FLAG_EJECT_BAK;
 
       static const char *state_names[] = {"DISARM", "PAD", "BOOST", "COAST", "DESCENT"};
       
@@ -970,6 +1040,11 @@ static void MX_TIM3_Init(void)
     Error_Handler();
   }
   if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.Pulse = 2000;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
   {
     Error_Handler();
   }
@@ -1571,10 +1646,10 @@ float sim_lin_accel_z(float t)
 {
   if (t < 2.0f) {
     return 0.0f;
-  } else if (t < 15.0f) {
+  } else if (t < 10.0f) {
     return 34.0f;
   } else {
-    return -10.0f;
+    return -30.0f;
   }
 }
 #endif
@@ -1593,6 +1668,7 @@ void Error_Handler(void)
   // servos would otherwise hold their last commanded deflection forever
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, SERVO_MY_TRIM);   // y axis servo
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, SERVO_MX_TRIM);   // x axis servo
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, EJECT_ARMED_US);  // safe servo to armed position
 
   __disable_irq();
   while (1)

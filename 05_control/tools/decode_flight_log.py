@@ -100,6 +100,8 @@ FLAG_BITS = [
     (0x08, "PULSE_Z",  "pulse_z hit us bound -- SHOULD NEVER FIRE"),
     (0x10, "NO_TRUST", "accel trust was zero (expected during boost)"),
     (0x20, "OVERRUN",  "loop missed its 5 ms deadline"),
+    (0x40, "EJECT",     "ejection sequence active"),
+    (0x80, "EJECT_BAK", "fired by backup timer, not apogee"),
 ]
 
 GRAVITY = 9.80665  # m/s^2, must match the firmware
