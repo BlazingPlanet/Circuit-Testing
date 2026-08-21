@@ -89,22 +89,23 @@ typedef enum {
 #define GRAVITY 9.80665f // m/s^2
 
 // Flight state machine thresholds
-#define LAUNCH_ACCEL_THRESH 15.0f // m/s^2, well above noise. replace with expected launch accel from Open Rocket
-#define BURNOUT_ACCEL_THRESH 5.0f // m/s^2, thrust gone
-#define APOGEE_VEL_THRESH -2.0f // m/s, definitively descending
+// Motor is Estes F15-0 with assumed rocket weight of 900g
+#define LAUNCH_ACCEL_THRESH  5.0f // m/s^2, well above noise. roughly ~1/3 of max accel (18.4 m/s^2) from OpenRocket sim
+#define BURNOUT_ACCEL_THRESH -1.0f // m/s^2, thrust gone
+#define APOGEE_VEL_THRESH -1.0f // m/s, definitively descending
 #define DEBOUNCE_PASSES 20 // 20 passes at 200 Hz = 100ms
 #define SIM_MODE 0   // 1 = synthetic flight profile, 0 = real sensors
 
 #define ARM_TILT_MAX     35.0f  // degrees from vertical
 #define ARM_GYRO_MAX     0.25f  // rad/s, any axis, must be below to enter armed state
 #define ARM_ACCEL_BAND   0.30f  // g, deviation from 1.0g must be below to enter armed state
-#define ARM_HOLD_PASSES  6000   // 30s hold time
+#define ARM_HOLD_PASSES  4000   // 20s hold time
 
 // ---- Recovery ejection (TIM3_CH3, PB0, Arduino A3) ----
 #define EJECT_ARMED_US       2000   // latch engaged, horn clear
 #define EJECT_KNOCK_US        600   // tuned against the latch
 #define EJECT_DWELL_PASSES    100   // 500 ms at 200 Hz
-#define EJECT_BACKUP_PASSES  2400   // 12 s after BOOST -- PLACEHOLDER, set from OpenRocket
+#define EJECT_BACKUP_PASSES  1500   // 7.5 s after BOOST -- set from OpenRocket
 
 // Kalman filter parameters
 #define KF_ACCEL_NOISE 0.15f // m/s^2, accelerometer noise std dev
@@ -148,7 +149,7 @@ typedef enum {
 // Flash Chip
 // Logging
 #define LOG_RECORDS_PER_PAGE  3      // 3 x 78 = 234 bytes, fits a 256-byte page
-#define LOG_STOP_PASSES       3000   // 15 s at 200 Hz after DESCENT
+#define LOG_STOP_PASSES       2000   // 10 s at 200 Hz after DESCENT
 #define FLASH_SIZE            0x1000000   // 16 MB
 
 // ---- PAD arming indicator ----
@@ -778,7 +779,7 @@ int main(void)
           break;
       }
 
-      // Logging starts when the vehicle arms, stops 30 s after apogee.
+      // Logging starts when the vehicle arms, stops 10 s after apogee.
       if (flight_state == FLIGHT_PAD && !log_active && log_stop_count == 0) {
         log_active = 1;
       }
