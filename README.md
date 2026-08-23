@@ -2,7 +2,8 @@
 Learning circuits with LED's, servos, IMU's, and Barometers
 
 **Hardware:**
-- Board: STM Nucleo-F446RE
+- Board for 01-05: STM Nucleo-F446RE
+- Board for 06: STM F411CEU6 "Black Pill"
 - IMU: ISM330DHCX
 - Barometer: BMP280
 - Flash Chip: SPI Flash W25Q128
