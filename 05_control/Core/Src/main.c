@@ -1686,10 +1686,10 @@ uint32_t Flash_FindWriteAddr(void)
 #if SIM_MODE
 float sim_lin_accel_z(float t)
 {
-  if (t < 2.0f) {
+  if (t < 10.0f) {
     return 0.0f;
-  } else if (t < 10.0f) {
-    return 34.0f;
+  } else if (t < 20.0f) {
+    return 20.0f;
   } else {
     return -30.0f;
   }
