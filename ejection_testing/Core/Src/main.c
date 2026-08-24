@@ -32,9 +32,9 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-#define EJECT_ARMED_US      2100   // latch engaged, horn clear
-#define EJECT_KNOCK_US      650   // TUNE THIS against the latch
-#define EJECT_DWELL_MS       800   // time at knock before returning
+#define EJECT_ARMED_US      2000   // latch engaged, horn clear
+#define EJECT_KNOCK_US      600   // TUNE THIS against the latch
+#define EJECT_DWELL_MS       500   // time at knock before returning
 #define EJECT_COUNTDOWN_MS  5000   // hands-clear delay after boot
 
 /* USER CODE END PD */
@@ -81,7 +81,7 @@ int main(void)
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
+    HAL_Init();
 
   /* USER CODE BEGIN Init */
 
