@@ -859,6 +859,11 @@ int main(void)
         flags |= LOG_FLAG_EJECT;
       if (eject_by_backup) flags |= LOG_FLAG_EJECT_BAK;
 
+      if (tick_ready) {
+        overrun_count++;
+        flags |= LOG_FLAG_OVERRUN;
+      }
+
       static const char *state_names[] = {"DISARM", "PAD", "BOOST", "COAST", "DESCENT"};
       
       if (pass_count % 10 == 0) {    // 200 Hz / 10 = ~20 lines per second
@@ -866,20 +871,7 @@ int main(void)
                state_names[flight_state], tilt, err_y, err_z, cmd_y, cmd_z,
                pulse_y, pulse_z, flags);     
       }
-
-      // --- Loop timing instrumentation ---
-      uint32_t t_elapsed = DWT->CYCCNT - t_start;
-      if (t_elapsed > worst_cycles) worst_cycles = t_elapsed;
-      if (tick_ready) {
-        overrun_count++;
-        flags |= LOG_FLAG_OVERRUN;
-      }
-
-      if (pass_count % 200 == 0) {   // once per second
-        printf(" [timing] worst:%lu us  overruns:%lu\r\n",
-               (unsigned long)(worst_cycles / 100), (unsigned long)overrun_count);
-      }
-
+      
       if (log_active && log_addr + 256 <= FLASH_SIZE) {
         LogRecord *r = (LogRecord *)(log_buf + log_count * sizeof(LogRecord));
         r->t_ms   = now;
@@ -900,6 +892,15 @@ int main(void)
           log_count = 0;
           for (int i = 0; i < 256; i++) log_buf[i] = 0xFF;
         }
+      }
+
+      // --- Loop timing instrumentation ---
+      uint32_t t_elapsed = DWT->CYCCNT - t_start;
+      if (t_elapsed > worst_cycles) worst_cycles = t_elapsed;
+
+      if (pass_count % 200 == 0) {   // once per second
+        printf(" [timing] worst:%lu us  overruns:%lu\r\n",
+               (unsigned long)(worst_cycles / 100), (unsigned long)overrun_count);
       }
     }   
     /* USER CODE END WHILE */
