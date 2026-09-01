@@ -138,10 +138,15 @@ typedef enum {
 
 #define MAX_DEFLECT     6.0f    // gimbal degrees, both axes
 
+// Verified (+Y on IMU points from +X servo toward center of rocket)
 #define SERVO_MY_SIGN   (+1.0f) // TBD -- verify by hand before flight
 #define SERVO_MX_SIGN   (+1.0f) // TBD -- verify by hand before flight
 
+#define SLEW_MAX_US  27   // µs of pulse change per 5 ms tick
+
+// TESTING
 #define BENCH_TEST 0  // TEMPORARY: force controller active for bench sign check
+#define SLEW_TEST 0   // 1 = bench slew measurement, never fly with this set
 
 // SPI Timeouts
 #define SPI_TIMEOUT_MS  10 // ms
@@ -383,6 +388,46 @@ int main(void)
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, SERVO_MY_TRIM);   // y axis servo
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, SERVO_MX_TRIM);   // x axis servo
 
+#if SLEW_TEST
+  {
+    uint32_t dwell = 100;   // ms, starting point
+    while (1) {
+      printf("dwell %lu ms\r\n", (unsigned long)dwell);
+
+      for (int i = 0; i < 5; i++) {
+        // swing to +MAX_DEFLECT
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2,
+          gimbal_to_pulse(+MAX_DEFLECT, SERVO_MX_SIGN, SERVO_MX_TRIM,
+                          SERVO_MX_USPD, SERVO_MX_MIN, SERVO_MX_MAX));
+        HAL_Delay(dwell);
+
+        // back to trim, settle
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, SERVO_MX_TRIM);
+        HAL_Delay(800);
+
+        // swing to -MAX_DEFLECT
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2,
+          gimbal_to_pulse(-MAX_DEFLECT, SERVO_MX_SIGN, SERVO_MX_TRIM,
+                          SERVO_MX_USPD, SERVO_MX_MIN, SERVO_MX_MAX));
+        HAL_Delay(dwell);
+
+        // back to trim, settle
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, SERVO_MX_TRIM);
+        HAL_Delay(800);
+      }
+
+      if (dwell > 20) {
+        dwell -= 10;
+      } else {
+        printf("floor reached, restarting\r\n");
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, SERVO_MY_TRIM);
+        HAL_Delay(3000);
+        dwell = 200;
+      }
+    }
+  }
+#endif
+
   // Ejection servo: compare register set BEFORE the channel is enabled, so
   // the first pulse out of PB0 is the armed position. A window at 1500 would
   // be a deploy event on the pad.
@@ -464,6 +509,10 @@ int main(void)
   uint8_t  wiggle_step = 0;        // 0 = not started
   uint32_t wiggle_timer = 0;
   uint8_t  wiggle_done = 0;        // latch -- runs once per boot
+
+  // --- Slew Rate Limiter ---
+  uint16_t prev_pulse_y = SERVO_MY_TRIM;
+  uint16_t prev_pulse_z = SERVO_MX_TRIM;
 
   // Covariance, symmetric 3x3 (six unique terms)
   float p00 = 1.0f,  p01 = 0.0f,  p02 = 0.0f;
@@ -844,6 +893,16 @@ int main(void)
       // --- Mixing: runs every tick, sets servo to trim if not in BOOST ---
       uint16_t pulse_y = gimbal_to_pulse(cmd_y, SERVO_MY_SIGN, SERVO_MY_TRIM, SERVO_MY_USPD, SERVO_MY_MIN, SERVO_MY_MAX);
       uint16_t pulse_z = gimbal_to_pulse(cmd_z, SERVO_MX_SIGN, SERVO_MX_TRIM, SERVO_MX_USPD, SERVO_MX_MIN, SERVO_MX_MAX);
+
+      // --- Slew rate limit: cap pulse change per tick ---
+      if (pulse_y > prev_pulse_y + SLEW_MAX_US) pulse_y = prev_pulse_y + SLEW_MAX_US;
+      else if (prev_pulse_y > pulse_y + SLEW_MAX_US) pulse_y = prev_pulse_y - SLEW_MAX_US;
+      prev_pulse_y = pulse_y;
+
+      if (pulse_z > prev_pulse_z + SLEW_MAX_US) pulse_z = prev_pulse_z + SLEW_MAX_US;
+      else if (prev_pulse_z > pulse_z + SLEW_MAX_US) pulse_z = prev_pulse_z - SLEW_MAX_US;
+      prev_pulse_z = pulse_z;
+      // --- End Slew rate limit ---
 
       __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pulse_y);   // y axis servo
       __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, pulse_z);   // x axis servo

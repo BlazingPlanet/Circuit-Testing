@@ -3,7 +3,8 @@
 **Project:** `06_stmport`
 **Date measured:** 2026-07-31 (servo geometry), ported to F411 2026-08-24
 **Hardware:** BPS.space-style 3D printed TVC mount, 2× SG90 9g servos, STM32F411CEU6 Black Pill
-**Power:** 4×AA battery pack (~6V), common ground to flight computer — **bench only**
+**Power:** LiPo (flight). 4×AA pack (~6V) with common ground was the bench supply used for
+the 2026-07-31 servo geometry measurements.
 
 > **Port note.** Servo geometry was measured on a Nucleo F446RE. Those measurements carry
 > over unchanged: the mount, servos, and linkages are the same hardware, and TIM3 is
@@ -203,8 +204,10 @@ is assembled at flight mass.
 
 #define MAX_DEFLECT     6.0f    // gimbal degrees, applies to both axes
 
-#define SERVO_MY_SIGN   (+1.0f) // UNVERIFIED -- see open items
-#define SERVO_MX_SIGN   (+1.0f) // UNVERIFIED -- see open items
+#define SLEW_MAX_US     27      // µs of pulse change per 5 ms tick
+
+#define SERVO_MY_SIGN   (+1.0f) // verified 2026-08-31
+#define SERVO_MX_SIGN   (+1.0f) // verified 2026-08-31
 ```
 
 **The two guards are independent by design.** `MAX_DEFLECT` prevents the *controller* from
@@ -240,6 +243,91 @@ additional authority while staying inside the verified-linear region.
 
 ---
 
+## Slew rate
+
+**Measured 2026-08-31**, vehicle vertical, inert motor installed and retained, both
+channels.
+
+### Method
+
+Bench script (`SLEW_TEST`) commands trim → full deflection → trim, holding the deflection
+command for a dwell that steps down across runs. Above the servo's transit time the nozzle
+reaches a tape mark at full travel; below it, the return-to-trim command arrives early and
+the throw falls short. The dwell at which full travel first disappears is the transit time.
+
+Judged against a fixed tape mark placed at full travel, watching the first swing of each
+dwell group.
+
+### Result
+
+| Channel | Travel | Pulse span | Transit |
+|---|---|---|---|
+| CH1 (Y) | 6° | 266 µs | 40–50 ms |
+| CH2 (X) | 6° | 291 µs | 40–50 ms |
+
+Both channels agree. CH1 was measured twice independently with the same result.
+
+### Derived limiter constant
+
+```
+266 µs / 50 ms x 5 ms = 27 µs per tick
+```
+
+```c
+#define SLEW_MAX_US  27   // µs of pulse change per 5 ms tick
+```
+
+The conservative end of the bracket (50 ms) was used. A single constant serves both
+channels; applying CH1's value to CH2 makes CH2 marginally more conservative than required,
+which is harmless.
+
+### The 50 Hz frame
+
+The control loop runs at 200 Hz but TIM3 generates PWM at 50 Hz, so **the servo receives a
+new pulse only every 20 ms — four control ticks accumulate between servo updates.** The
+limiter therefore permits up to 4 × 27 = 108 µs of change per servo frame, which matches
+the measured capability (5.3 µs/ms × 20 ms ≈ 106 µs).
+
+This also means the bisection measurement is quantized to the 20 ms frame. A 50 ms transit
+is only 2.5 frames, which is part of why the result brackets 40–50 ms rather than resolving
+to a single value.
+
+50 Hz is the servo's specified control frame rate and was not changed. Faster framing
+(100–125 Hz) is tolerated by many analog servos and would reduce both quantization and
+latency, but running outside the rated spec was not justified for a first flight.
+
+### Consequence for control design
+
+| Quantity | Value |
+|---|---|
+| Actuator bandwidth | ~20 Hz |
+| Design `ω_n` (bandwidth ÷ 5) | ~4 Hz / 25 rad/s |
+| **Design `ω_n` after PWM frame latency** | **~3 Hz / 19 rad/s** |
+| Design `ζ` | 0.7 |
+
+The haircut from 25 to 19 rad/s accounts for up to 20 ms of PWM frame latency sitting in
+the loop on top of servo transit time. At ω_n = 19 rad/s and ζ = 0.7, settling time is
+roughly 300 ms, giving about 11 correction cycles across the 3.45 s burn.
+
+### Verification
+
+Limiter confirmed live by temporarily setting `SLEW_MAX_US` to 1 and observing the PAD
+wiggle: each wiggle step lasts 60 ticks and needs 178 µs of travel, so at 1 µs/tick the
+nozzle drifts without ever reaching a wiggle position. Restored to 27 after confirming.
+
+### Measurement caveat — first attempt discarded
+
+The first round of slew measurements was invalid: **the motor was sliding down the tube
+during the test.** Load on the servo changed between runs, and video and bisection methods
+disagreed by roughly 3×. Adding friction to retain the motor brought both methods into
+agreement.
+
+**Verify motor retention before any future re-measurement.** A motor that can slide on the
+bench can slide under thrust, which would also shift the lever arm mid-burn and invalidate
+the plant model.
+
+---
+
 ## Loop timing budget
 
 Measured on the F411 at 100 MHz, DWT cycle counter sampled across the full loop body
@@ -260,17 +348,22 @@ cheapest available saving.
 
 ## Open items
 
-- [ ] **Actuation sign check** — does positive `cmd` produce a deflection that *corrects*
-      the error, or worsen it? `SERVO_MY_SIGN` and `SERVO_MX_SIGN` are both `+1.0f` and
-      **unverified**. Must be confirmed by hand in flight configuration before flight.
-      This is the single most dangerous remaining unknown in the control loop.
-- [ ] Servo behavior under thrust load (bench measurements are unloaded)
-- [ ] Slew rate limiting — SG90 transit time under load not yet characterized
-- [ ] Flight battery (LiPo + BEC); the 4×AA pack sags under two-servo load and is
-      bench-only
-- [ ] Control gains `Kp_att` / `Kd_att` — currently placeholders (30, 3), pending plant
-      model from OpenRocket or a pivot test rig
+- [x] **Actuation sign check** — verified by hand in flight configuration. Positive `cmd`
+      produces a deflection that corrects the error on both axes.
+- [x] Slew rate characterization and limiter — see the slew rate section above.
+- [x] Flight battery — LiPo, confirmed working. The 4×AA pack referenced in the header
+      remains the bench supply only.
+- [ ] Servo behavior under *thrust* load. Bench measurements are loaded with an inert
+      motor, which captures the motor's rotational inertia but not thrust-induced bearing
+      friction or nozzle aerodynamic load. Bounded rather than measured; the first flight
+      log (`cmd_y`/`cmd_z` against `pulse_y`/`pulse_z`) will show whether the limiter binds
+      in flight.
+- [ ] Control gains `Kp_att` / `Kd_att` — currently placeholders (30, 3). Design targets
+      are ω_n ≈ 19 rad/s, ζ = 0.7; pending CG, lever arm, and pendulum moment-of-inertia
+      measurements to supply `I`, `L`, and `T`.
 - [ ] `EJECT_BACKUP_PASSES` re-derived at as-built flight mass
+- [ ] Motor retention verified for flight — friction fit was adequate for bench testing
+      only.
 
 ---
 
@@ -288,3 +381,9 @@ cheapest available saving.
   and the servo heats quickly.
 - If TIM3's prescaler is ever changed, every pulse width in this document becomes invalid.
   The 1 µs tick is load-bearing.
+- Re-measure slew rate if the servos, linkage, motor mass, or supply voltage change. Slew
+  rate is voltage-dependent — a sagging pack measures slower than a fresh one.
+- Confirm motor retention before any slew measurement. A sliding motor invalidated the
+  first attempt and produced a 3× disagreement between methods.
+- The derived constants section and this document must stay in sync with `main.c`. If a
+  `#define` changes in one place, change it in both.
