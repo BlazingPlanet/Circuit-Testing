@@ -6,11 +6,13 @@
 **Power:** LiPo (flight). 4×AA pack (~6V) with common ground was the bench supply used for
 the 2026-07-31 servo geometry measurements.
 
-> **Port note.** Servo geometry was measured on a Nucleo F446RE. Those measurements carry
-> over unchanged: the mount, servos, and linkages are the same hardware, and TIM3 is
+> **Port note.** Servo geometry was measured on a Nucleo F446RE. Those measurements carry> over unchanged: the mount, servos, and linkages are the same hardware, and TIM3 is
 > configured for the same 1 µs tick on both boards. A given pulse width means the same
 > physical deflection. Only the pin assignments and clock tree differ, and those are
 > updated below.
+
+**Companion document:** `TUNING.md` covers the vehicle plant model (mass, CG, lever arm,
+moment of inertia) and the control gains derived from it.
 
 ---
 
@@ -204,7 +206,7 @@ is assembled at flight mass.
 
 #define MAX_DEFLECT     6.0f    // gimbal degrees, applies to both axes
 
-#define SLEW_MAX_US     27      // µs of pulse change per 5 ms tick
+#define SLEW_MAX_US     25      // µs of pulse change per 5 ms tick
 
 #define SERVO_MY_SIGN   (+1.0f) // verified 2026-08-31
 #define SERVO_MX_SIGN   (+1.0f) // verified 2026-08-31
@@ -270,23 +272,36 @@ Both channels agree. CH1 was measured twice independently with the same result.
 ### Derived limiter constant
 
 ```
-266 µs / 50 ms x 5 ms = 27 µs per tick
+266 µs / 50 ms x 5 ms = 27 µs per tick   →   rounded down to 25
 ```
 
 ```c
-#define SLEW_MAX_US  27   // µs of pulse change per 5 ms tick
+#define SLEW_MAX_US  25   // µs of pulse change per 5 ms tick
 ```
 
-The conservative end of the bracket (50 ms) was used. A single constant serves both
-channels; applying CH1's value to CH2 makes CH2 marginally more conservative than required,
-which is harmless.
+The conservative end of the bracket (50 ms) was used, then reduced from 27 to **25** for
+additional margin. A single constant serves both channels; applying CH1's value to CH2
+makes CH2 marginally more conservative than required, which is harmless.
+
+**Why err low.** The limiter caps *commanded* rate. If the cap sits above what the servo
+can physically execute, the servo hits its own limit first, the cap never binds, and the
+log shows `cmd` and `pulse` tracking perfectly while the nozzle quietly lags — a lag that
+is invisible in the data. Setting the limiter slightly below measured capability makes it
+engage, which both keeps commands inside what the hardware can deliver and records the
+actuator constraint in the log where it can be seen.
+
+Two unmeasured effects both point toward the servo being slower in flight than on the
+bench: thrust-induced bearing friction and nozzle aerodynamic load (neither is captured by
+the inert-motor test), and battery sag after the arming hold (servo speed is
+voltage-dependent). 25 µs/tick costs ~6% of commanded rate against the measurement and buys
+margin against both.
 
 ### The 50 Hz frame
 
 The control loop runs at 200 Hz but TIM3 generates PWM at 50 Hz, so **the servo receives a
 new pulse only every 20 ms — four control ticks accumulate between servo updates.** The
-limiter therefore permits up to 4 × 27 = 108 µs of change per servo frame, which matches
-the measured capability (5.3 µs/ms × 20 ms ≈ 106 µs).
+limiter therefore permits up to 4 × 25 = 100 µs of change per servo frame, just under the
+measured capability (5.3 µs/ms × 20 ms ≈ 106 µs).
 
 This also means the bisection measurement is quantized to the 20 ms frame. A 50 ms transit
 is only 2.5 frames, which is part of why the result brackets 40–50 ms rather than resolving
@@ -300,20 +315,23 @@ latency, but running outside the rated spec was not justified for a first flight
 
 | Quantity | Value |
 |---|---|
-| Actuator bandwidth | ~20 Hz |
-| Design `ω_n` (bandwidth ÷ 5) | ~4 Hz / 25 rad/s |
-| **Design `ω_n` after PWM frame latency** | **~3 Hz / 19 rad/s** |
+| Measured actuator bandwidth | ~20 Hz |
+| Effective bandwidth at `SLEW_MAX_US` = 25 | ~19 Hz |
+| Bandwidth ÷ 5 | ~4 Hz / 25 rad/s |
+| Ceiling after PWM frame latency | ~3 Hz / 19 rad/s |
+| **Selected design `ω_n`** | **12 rad/s** |
 | Design `ζ` | 0.7 |
 
 The haircut from 25 to 19 rad/s accounts for up to 20 ms of PWM frame latency sitting in
-the loop on top of servo transit time. At ω_n = 19 rad/s and ζ = 0.7, settling time is
-roughly 300 ms, giving about 11 correction cycles across the 3.45 s burn.
+the loop on top of servo transit time. The final selection of 12 rad/s sits below even that
+ceiling, chosen so the controller stays in its linear regime out to 4° of tilt rather than
+saturating early — see `TUNING.md` for that derivation and the resulting gains.
 
 ### Verification
 
 Limiter confirmed live by temporarily setting `SLEW_MAX_US` to 1 and observing the PAD
 wiggle: each wiggle step lasts 60 ticks and needs 178 µs of travel, so at 1 µs/tick the
-nozzle drifts without ever reaching a wiggle position. Restored to 27 after confirming.
+nozzle drifts without ever reaching a wiggle position. Restored to 25 after confirming.
 
 ### Measurement caveat — first attempt discarded
 
@@ -358,9 +376,8 @@ cheapest available saving.
       friction or nozzle aerodynamic load. Bounded rather than measured; the first flight
       log (`cmd_y`/`cmd_z` against `pulse_y`/`pulse_z`) will show whether the limiter binds
       in flight.
-- [ ] Control gains `Kp_att` / `Kd_att` — currently placeholders (30, 3). Design targets
-      are ω_n ≈ 19 rad/s, ζ = 0.7; pending CG, lever arm, and pendulum moment-of-inertia
-      measurements to supply `I`, `L`, and `T`.
+- [x] Control gains `Kp_att` / `Kd_att` — derived from measured plant. See `TUNING.md`.
+      Flight validation still pending.
 - [ ] `EJECT_BACKUP_PASSES` re-derived at as-built flight mass
 - [ ] Motor retention verified for flight — friction fit was adequate for bench testing
       only.

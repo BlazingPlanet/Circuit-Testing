@@ -89,9 +89,9 @@ typedef enum {
 #define GRAVITY 9.80665f // m/s^2
 
 // Flight state machine thresholds
-// Motor is Estes F15-0 with assumed rocket weight of 900g
-#define LAUNCH_ACCEL_THRESH  5.0f // m/s^2, well above noise. roughly ~1/3 of max accel (18.4 m/s^2) from OpenRocket sim
-#define BURNOUT_ACCEL_THRESH -1.0f // m/s^2, thrust gone
+// Motor is Estes F15-0 with total loaded mass of 705g
+#define LAUNCH_ACCEL_THRESH  5.0f // m/s^2, well above noise. Max accel = ~27 m/s^2 from OpenRocket sim
+#define BURNOUT_ACCEL_THRESH -2.0f // m/s^2, thrust gone
 #define APOGEE_VEL_THRESH -1.0f // m/s, definitively descending
 #define DEBOUNCE_PASSES 20 // 20 passes at 200 Hz = 100ms
 #define SIM_MODE 0   // 1 = synthetic flight profile, 0 = real sensors
@@ -105,7 +105,7 @@ typedef enum {
 #define EJECT_ARMED_US       2000   // latch engaged, horn clear
 #define EJECT_KNOCK_US        600   // tuned against the latch
 #define EJECT_DWELL_PASSES    100   // 500 ms at 200 Hz
-#define EJECT_BACKUP_PASSES  1500   // 7.5 s after BOOST -- set from OpenRocket
+#define EJECT_BACKUP_PASSES  1600   // 8.0 s after BOOST -- set from OpenRocket
 
 // Kalman filter parameters
 #define KF_ACCEL_NOISE 0.15f // m/s^2, accelerometer noise std dev
@@ -142,7 +142,7 @@ typedef enum {
 #define SERVO_MY_SIGN   (+1.0f) // TBD -- verify by hand before flight
 #define SERVO_MX_SIGN   (+1.0f) // TBD -- verify by hand before flight
 
-#define SLEW_MAX_US  27   // µs of pulse change per 5 ms tick
+#define SLEW_MAX_US  25   // µs of pulse change per 5 ms tick
 
 // TESTING
 #define BENCH_TEST 0  // TEMPORARY: force controller active for bench sign check
@@ -520,8 +520,8 @@ int main(void)
   float p22 = 1.0f;  
   
   // Control gain
-  const float Kp_att = 30.0f;  // gimbal degrees per radian of attitude error <----- MUST BE TUNED
-  const float Kd_att = 3.0f;   // gimbal degrees per rad/s of body rate <----- MUST BE TUNED
+  const float Kp_att = 86.0f;  // gimbal degrees per radian of attitude error <----- FROM TUNING.MD
+  const float Kd_att = 10.0f;   // gimbal degrees per rad/s of body rate <----- FROM TUNING.MD
 
   while (1)
   {
