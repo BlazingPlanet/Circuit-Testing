@@ -190,6 +190,11 @@ The derivation is sound but the inputs carry real uncertainty. Ranked by impact 
 `Kp` scales with `ω_n²`, so any error in the actuator bandwidth ceiling propagates squared.
 This is the main reason for choosing ω_n well below the computed limit rather than at it.
 
+**Attitude estimate quality is a separate and equally important input.** Perfect gains on a
+drifting estimate produce confident, well-damped corrections toward the wrong vertical. See
+the boost-phase drift section below — measured at ~0.45° accumulated by burnout, which
+consumes roughly 11% of the linear range before saturation.
+
 ---
 
 ## Validation plan
@@ -207,18 +212,102 @@ The first flight is the validation. Nothing here has been confirmed in flight.
 - Timing between `err_y` appearing and the attitude responding — reveals actuator lag beyond
   what was modeled.
 
-**Boost-phase estimator caveat.** During the burn, thrust dominates what the accelerometer
-reads as "down," so the Mahony `trust` term correctly fades to zero and attitude runs on
-open-loop gyro integration for the entire burn. This is standard practice for rocket
-estimators, but it is **untested on this vehicle** and it is the input the control law
-depends on. Gyro drift over 3.45 s should be small; the flight log will show whether it is.
+---
+
+## Boost-phase estimator drift
+
+**Measured 2026-09-03**, three runs, vehicle stationary and near-vertical on a solid
+surface.
+
+### Why this needs measuring
+
+The Mahony filter fuses gyro and accelerometer. The gyro integrates rotation but drifts;
+the accelerometer measures gravity's direction and bounds that drift. The `trust` term
+weights the accelerometer by how close its magnitude is to 1 g.
+
+During the burn, acceleration is roughly 2 g, so total measured acceleration is ~2.2 g.
+`g_err` sits well past `TRUST_ZERO` (0.30), and **`trust` goes to exactly zero for the
+entire burn.** This is correct behavior — under thrust, the accelerometer's "down" points
+backward along the body axis, and correcting toward it would actively corrupt attitude.
+
+The consequence is that for all 3.45 s of powered flight, attitude runs on **open-loop gyro
+integration** with nothing bounding the drift. That is precisely the window where the
+control law is active and depends on the attitude estimate being right.
+
+Note that the bias *subtraction* (`wx -= bx`) is ungated and continues throughout. Only the
+bias *estimate update* is gated by `trust`. So the pad hold's converged bias value stays
+frozen and keeps being applied during boost — the drift measured below is the residual
+after that subtraction, not raw gyro bias.
+
+### Method
+
+Temporary `DRIFT_TEST` build forces `trust = 0.0f` once the vehicle leaves `FLIGHT_DISARMED`,
+reproducing the boost-phase condition without needing acceleration. Bias converges normally
+during the 20 s arming hold, then correction cuts out at the `*** ARMED ***` transition.
+`tilt` recorded at that transition, at +3.5 s (burn duration), and at +10 s (shape check).
+
+### Results
+
+| Run | At cutoff | +3.5 s | Drift | +10 s | Drift |
+|---|---|---|---|---|---|
+| 1 | 2.13° | 2.65° | 0.52° | 4.44° | 2.31° |
+| 2 | 1.97° | 2.40° | 0.43° | 4.23° | 2.26° |
+| 3 | 1.99° | 2.41° | 0.42° | 4.22° | 2.23° |
+
+**Rate: ~0.13 °/s over the burn window, ~0.23 °/s over 10 s.**
+
+Drift is approximately linear with a mild upward curl, consistent with uncorrected constant
+gyro bias plus slow bias wander. No sign of integration blowup or quaternion normalization
+trouble.
+
+### Interpretation
+
+**Accumulated phantom tilt at burnout: ~0.45°.** Against the 4° linear range before
+saturation, that consumes roughly 11% of available headroom. Acceptable.
+
+**The repeatability is the notable result.** Runs 2 and 3 agree to 0.01° at both
+checkpoints, across separate power cycles, always in the same direction. A random-walk bias
+would not repeat like that. This is a *systematic* residual — most likely bias the Mahony
+integral term cannot fully null within the 20 s hold, given `Ki = 0.01` and the
+`BIAS_MAX = 0.05` rad/s cap.
+
+A predictable error is a better error. 0.45° is small enough to design around rather than
+engineer against.
+
+### Not a runaway
+
+Drift is unbounded *in the test*, because the test never restores correction. In flight it
+is bounded by burn duration: at burnout, acceleration drops, `g_err` falls back inside
+`TRUST_ZERO`, trust returns, and the filter pulls the estimate back toward gravity. Drift
+resets every burn and does not accumulate across the flight.
+
+### Possible improvements (flight two, not before)
+
+All of these attack bias convergence *during the pad hold* — boost-phase subtraction
+already works correctly and is not the problem.
+
+- Raise `Ki` above 0.01 so bias converges further within the hold
+- Extend `ARM_HOLD_PASSES` beyond 20 s
+- Explicitly average gyro output during the still period and subtract that, rather than
+  relying solely on the integral term
+- Freeze the bias estimate at launch detection
+
+None is worth changing before this flight: it would mean modifying a validated estimator
+days out, and the change would itself need revalidation.
+
+**One caveat.** Gyro bias drifts with temperature. Over a 3.45 s burn that is negligible,
+but a board that sat in the sun and then armed would learn a bias for a different thermal
+state than it flies in. Not engineered around. Worth remembering if in-flight drift ever
+fails to match these bench numbers.
 
 ---
 
 ## Open items
 
 - [ ] Flight validation of all gains — nothing here is flight-confirmed
-- [ ] Boost-phase estimator drift characterization
+- [x] Boost-phase estimator drift characterization — measured 2026-09-03, ~0.45° over the
+      burn. See the section above.
+- [ ] Bias convergence improvement during pad hold (flight two)
 - [ ] Consider gain scheduling against the thrust curve if fixed gains prove inadequate
 - [ ] Re-measure `I` if mass, motor, or configuration changes. Inertia is not portable
       between builds.

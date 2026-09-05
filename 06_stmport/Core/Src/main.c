@@ -94,18 +94,17 @@ typedef enum {
 #define BURNOUT_ACCEL_THRESH -2.0f // m/s^2, thrust gone
 #define APOGEE_VEL_THRESH -1.0f // m/s, definitively descending
 #define DEBOUNCE_PASSES 20 // 20 passes at 200 Hz = 100ms
-#define SIM_MODE 0   // 1 = synthetic flight profile, 0 = real sensors
 
 #define ARM_TILT_MAX     35.0f  // degrees from vertical
 #define ARM_GYRO_MAX     0.25f  // rad/s, any axis, must be below to enter armed state
 #define ARM_ACCEL_BAND   0.30f  // g, deviation from 1.0g must be below to enter armed state
 #define ARM_HOLD_PASSES  4000   // 20s hold time
 
-// ---- Recovery ejection (TIM3_CH3, PB0, Arduino A3) ----
+// ---- Recovery ejection (TIM3_CH3, PB0) ----
 #define EJECT_ARMED_US       2000   // latch engaged, horn clear
 #define EJECT_KNOCK_US        600   // tuned against the latch
 #define EJECT_DWELL_PASSES    100   // 500 ms at 200 Hz
-#define EJECT_BACKUP_PASSES  1600   // 8.0 s after BOOST -- set from OpenRocket
+#define EJECT_BACKUP_PASSES  1500   // 7.5 s after BOOST -- set from OpenRocket
 
 // Kalman filter parameters
 #define KF_ACCEL_NOISE 0.15f // m/s^2, accelerometer noise std dev
@@ -124,8 +123,8 @@ typedef enum {
 
 // ---- Servo calibration (measured 2026-07-31, 6.75" lever arm) ----
 // Channel map:
-//   TIM3_CH1 = PB4 = Arduino D5 = mount "Y" axis servo
-//   TIM3_CH2 = PB5 = Arduino D4 = mount "X" axis servo
+//   TIM3_CH1 = PB4 = mount "Y" axis servo
+//   TIM3_CH2 = PB5 = mount "X" axis servo
 #define SERVO_MY_TRIM   1575    // µs at gimbal neutral
 #define SERVO_MY_USPD   44.4f   // µs per gimbal degree
 #define SERVO_MY_MIN    1200    // µs, inside mechanical stop at 1150
@@ -139,14 +138,20 @@ typedef enum {
 #define MAX_DEFLECT     6.0f    // gimbal degrees, both axes
 
 // Verified (+Y on IMU points from +X servo toward center of rocket)
-#define SERVO_MY_SIGN   (+1.0f) // TBD -- verify by hand before flight
-#define SERVO_MX_SIGN   (+1.0f) // TBD -- verify by hand before flight
+#define SERVO_MY_SIGN   (+1.0f) // Verified on Bench
+#define SERVO_MX_SIGN   (+1.0f) // Verified on Bench
 
 #define SLEW_MAX_US  25   // µs of pulse change per 5 ms tick
 
 // TESTING
 #define BENCH_TEST 0  // TEMPORARY: force controller active for bench sign check
 #define SLEW_TEST 0   // 1 = bench slew measurement, never fly with this set
+#define DRIFT_TEST 0  // 1 = disable accel correction to measure gyro drift
+#define SIM_MODE 0   // 1 = synthetic flight profile, 0 = real sensors
+#define EJECTION_BENCH_TEST 0 // 1 = bench test of ejection sequence, 0 = normal flight
+
+// Ejection Testing
+#define EJECT_DWELL_MS       500   // time at knock before returning
 
 // SPI Timeouts
 #define SPI_TIMEOUT_MS  10 // ms
@@ -293,6 +298,17 @@ int main(void)
   MX_TIM3_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+
+#if EJECTION_BENCH_TEST
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, EJECT_ARMED_US);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+  HAL_Delay(10000);
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, EJECT_KNOCK_US);
+  HAL_Delay(EJECT_DWELL_MS);
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, EJECT_ARMED_US);
+  while (1) { }
+#endif
+
   printf("LogRecord size: %u bytes (expected 78)\r\n", (unsigned)sizeof(LogRecord));
 
   // CS rests HIGH (deselected). Overrides CubeMX's startup LOW
@@ -606,6 +622,10 @@ int main(void)
         trust = 1.0f - (g_err - TRUST_BAND) / (TRUST_ZERO - TRUST_BAND);
       }
 
+#if DRIFT_TEST
+      if (flight_state != FLIGHT_DISARMED) trust = 0.0f;  // disable accel correction after 20s for gyro drift measurement
+#endif
+
       if (an > 1e-3f) {
         float max = ax / an, may = ay / an, maz = az / an; // measured gravity direction
 
@@ -673,7 +693,9 @@ int main(void)
 // SIM MODE LIN Z
 #if SIM_MODE
       static float sim_t = 0.0f;
-      sim_t += dt;
+      if (flight_state >= FLIGHT_PAD) {
+        sim_t += dt;
+      }
       lin_accel_z = sim_lin_accel_z(sim_t);
 #endif
 
@@ -793,7 +815,7 @@ int main(void)
       // exists because every path to DESCENT runs through launch, burnout,
       // and apogee detection -- and any one of them failing leaves the
       // vehicle ballistic with no chute. A late deployment beats none.
-      if (flight_state == FLIGHT_BOOST) boost_passes++;
+      if (flight_state == FLIGHT_BOOST || boost_passes > 0) boost_passes++;
 
       int fire_apogee = (flight_state == FLIGHT_DESCENT);
       int fire_backup = (boost_passes > 0 && boost_passes >= EJECT_BACKUP_PASSES);
@@ -1729,10 +1751,10 @@ float sim_lin_accel_z(float t)
 {
   if (t < 2.0f) {
     return 0.0f;
-  } else if (t < 10.0f) {
-    return 34.0f;
+  } else if (t < 5.45f) {
+    return 20.0f;
   } else {
-    return -30.0f;
+    return -10.0f;
   }
 }
 #endif
