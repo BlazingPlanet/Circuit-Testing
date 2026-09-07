@@ -208,7 +208,7 @@ is assembled at flight mass.
 
 #define SLEW_MAX_US     25      // µs of pulse change per 5 ms tick
 
-#define SERVO_MY_SIGN   (+1.0f) // verified 2026-08-31
+#define SERVO_MY_SIGN   (-1.0f) // verified 2026-08-31
 #define SERVO_MX_SIGN   (+1.0f) // verified 2026-08-31
 ```
 
