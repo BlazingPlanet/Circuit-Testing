@@ -11,10 +11,13 @@ USAGE
     python decode_flight_log.py capture.log --csv flight.csv
     python decode_flight_log.py capture.log --replay      # 3D orientation replay
     python decode_flight_log.py capture.log --flight 2    # pick one flight
+    python decode_flight_log.py capture.log --no-trim     # plot the whole log
+    python decode_flight_log.py capture.log --save-replay flight.gif
 
 REQUIREMENTS
 ------------
     pip install numpy matplotlib
+    (--save-replay to .mp4 also needs ffmpeg on PATH; .gif does not)
 
 WHAT IT EXPECTS
 ---------------
@@ -91,6 +94,10 @@ FIELD_NAMES = [
 ]
 
 STATE_NAMES = ["DISARM", "PAD", "BOOST", "COAST", "DESCENT"]
+
+# State byte values, referenced by trim_flight().
+STATE_BOOST = 2
+STATE_DESCENT = 4
 
 # Flag bits, mirroring the #defines in main.c
 FLAG_BITS = [
@@ -281,12 +288,51 @@ def to_arrays(flight):
     return compute_derived(data)
 
 
+def trim_flight(data, pre_boost=10.0, post_descent=10.0):
+    """Slice the log down to the window worth looking at.
+
+    Logging starts at PAD, so a log is mostly pad time -- a five minute hold
+    followed by fifteen seconds of flight squeezes the entire powered portion
+    into a few pixels. This keeps `pre_boost` seconds before BOOST entry
+    through `post_descent` seconds after DESCENT entry.
+
+    Returns (data, (t_first, t_last)) or (data, None) when there is nothing
+    to trim. No BOOST in the log means the vehicle never launched, and in that
+    case you want to see everything -- the reason it didn't launch is in the
+    part that would have been cut.
+    """
+    state = data["state"]
+    t = data["t"]
+
+    boost = np.where(state == STATE_BOOST)[0]
+    if not len(boost):
+        return data, None
+
+    t_start = t[boost[0]] - pre_boost
+
+    # No DESCENT means apogee was never detected -- run to the end of the log
+    # rather than guessing where the interesting part stops.
+    descent = np.where(state == STATE_DESCENT)[0]
+    t_end = t[descent[0]] + post_descent if len(descent) else t[-1]
+
+    keep = (t >= t_start) & (t <= t_end)
+    if keep.sum() < 2:
+        return data, None
+
+    trimmed = {k: v[keep] for k, v in data.items()}
+    return trimmed, (t[keep][0], t[keep][-1])
+
+
 # ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
 
 def print_summary(data):
-    """Print flight statistics and anything worth investigating."""
+    """Print flight statistics and anything worth investigating.
+
+    Always runs on the full log, never the trimmed one: flag percentages and
+    record counts should describe the flight as flown, not the plot window.
+    """
     t = data["t"]
     print(f"\n  Records:  {len(t)}")
     print(f"  Duration: {t[-1]:.1f} s")
@@ -318,16 +364,39 @@ def print_summary(data):
     # Flag counts. The PULSE_Y/PULSE_Z bits are assertions -- guard 1 clamps
     # in degrees before guard 2 ever sees the value, so if these ever appear
     # a calibration constant is wrong and the mixing layer needs a look.
+    #
+    # Percentages are reported twice. A log is mostly pad time -- a five
+    # minute hold around three seconds of boost -- so a whole-log percentage
+    # buries what happened during powered flight. 418 saturated ticks is
+    # "3% of the log" and also "80% of the burn", and only the second number
+    # tells you the controller was pinned for most of the time it mattered.
     print("\n  Flags:")
     flags = data["flags"]
+    boost = data["state"] == STATE_BOOST
+    n_boost = int(boost.sum())
+
+    if n_boost:
+        print(f"    ({n_boost} ticks in BOOST, "
+              f"{n_boost * 0.005:.2f} s)")
+
     any_set = False
     for bit, name, desc in FLAG_BITS:
-        n = int(np.count_nonzero(flags & bit))
-        if n:
-            any_set = True
-            pct = 100.0 * n / len(flags)
-            marker = "  <-- INVESTIGATE" if bit in (0x04, 0x08, 0x20) else ""
+        hits = (flags & bit) != 0
+        n = int(hits.sum())
+        if not n:
+            continue
+        any_set = True
+        pct = 100.0 * n / len(flags)
+        marker = "  <-- INVESTIGATE" if bit in (0x04, 0x08, 0x20) else ""
+
+        if n_boost:
+            n_b = int((hits & boost).sum())
+            pct_b = 100.0 * n_b / n_boost
+            print(f"    {name:9s} {n:6d} ticks ({pct:5.1f}% of log)  "
+                  f"{n_b:5d} in BOOST ({pct_b:5.1f}% of burn)  {desc}{marker}")
+        else:
             print(f"    {name:9s} {n:6d} ticks ({pct:5.1f}%)  {desc}{marker}")
+
     if not any_set:
         print("    none set")
 
@@ -381,7 +450,7 @@ def plot_overview(data, title):
     shade_states(ax, data)
     ax.plot(t, data["kf_h"], lw=1.2)
     ax.set_ylabel("Altitude (m)")
-    ax.set_title("Kalman altitude")
+    ax.set_title("Altitude")
     ax.grid(alpha=0.3)
 
     # --- Velocity ---
@@ -390,7 +459,7 @@ def plot_overview(data, title):
     ax.plot(t, data["kf_v"], lw=1.2, color="tab:orange")
     ax.axhline(0, color="k", lw=0.5)
     ax.set_ylabel("Velocity (m/s)")
-    ax.set_title("Kalman vertical velocity")
+    ax.set_title("Vertical Velocity")
     ax.grid(alpha=0.3)
 
     # --- Linear acceleration ---
@@ -399,7 +468,7 @@ def plot_overview(data, title):
     ax.plot(t, data["lin_accel_z"], lw=0.8, color="tab:red")
     ax.axhline(0, color="k", lw=0.5)
     ax.set_ylabel("Accel (m/s^2)")
-    ax.set_title("World-frame vertical acceleration (gravity removed)")
+    ax.set_title("World-Frame Vertical Acceleration (Gravity Removed)")
     ax.grid(alpha=0.3)
 
     # --- Tilt ---
@@ -407,18 +476,22 @@ def plot_overview(data, title):
     shade_states(ax, data)
     ax.plot(t, data["tilt_deg"], lw=1.2, color="tab:green")
     ax.set_ylabel("Tilt (deg)")
-    ax.set_title("Angle from vertical")
+    ax.set_title("Angle From Vertical")
     ax.grid(alpha=0.3)
 
     # --- Attitude error ---
     ax = axes[2, 0]
     shade_states(ax, data)
-    ax.plot(t, data["err_y"], lw=0.9, label="err_y")
-    ax.plot(t, data["err_z"], lw=0.9, label="err_z")
+    # err_y/err_z are logged as a rotation vector in radians, whose magnitude
+    # is sin(tilt) -- so for the small angles this controller is designed
+    # around, converting to degrees gives a number that reads directly as
+    # "degrees off vertical" and lines up with the tilt plot beside it.
+    ax.plot(t, np.degrees(data["err_y"]), lw=0.9, label="err_y")
+    ax.plot(t, np.degrees(data["err_z"]), lw=0.9, label="err_z")
     ax.axhline(0, color="k", lw=0.5)
-    ax.set_ylabel("Error (rad)")
+    ax.set_ylabel("Error (deg)")
     ax.set_xlabel("Time (s)")
-    ax.set_title("Attitude error about body Y and Z")
+    ax.set_title("Attitude Error About Body Y And Z")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
 
@@ -433,7 +506,7 @@ def plot_overview(data, title):
     ax.axhline(0, color="k", lw=0.5)
     ax.set_ylabel("Gimbal (deg)")
     ax.set_xlabel("Time (s)")
-    ax.set_title("Commanded deflection")
+    ax.set_title("Commanded Deflection")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
 
@@ -453,7 +526,7 @@ def plot_detail(data, title):
     for name in ("wx", "wy", "wz"):
         ax.plot(t, np.degrees(data[name]), lw=0.7, label=name)
     ax.set_ylabel("Rate (deg/s)")
-    ax.set_title("Body angular rates (post bias correction)")
+    ax.set_title("Body Angular Rates (Post Bias Correction)")
     ax.legend(fontsize=8, ncol=3)
     ax.grid(alpha=0.3)
 
@@ -463,7 +536,7 @@ def plot_detail(data, title):
     for name in ("ax_g", "ay_g", "az_g"):
         ax.plot(t, data[name], lw=0.7, label=name)
     ax.set_ylabel("Accel (g)")
-    ax.set_title("Raw accelerometer, body frame")
+    ax.set_title("Raw Accelerometer, Body Frame")
     ax.legend(fontsize=8, ncol=3)
     ax.grid(alpha=0.3)
 
@@ -478,7 +551,7 @@ def plot_detail(data, title):
     ax.axhline(1575, color="tab:blue", ls=":", lw=0.7)
     ax.axhline(1825, color="tab:orange", ls=":", lw=0.7)
     ax.set_ylabel("Pulse (us)")
-    ax.set_title("Servo pulse widths (dotted = trim)")
+    ax.set_title("Servo Pulse Widths (Dotted = Trim)")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
 
@@ -495,7 +568,7 @@ def plot_detail(data, title):
     ax.set_yticklabels([n for _, n, _ in FLAG_BITS], fontsize=8)
     ax.set_ylim(-0.5, len(FLAG_BITS) - 0.5)
     ax.set_xlabel("Time (s)")
-    ax.set_title("Log flags")
+    ax.set_title("Log Flags")
     ax.grid(alpha=0.3, axis="x")
 
     fig.tight_layout()
@@ -654,6 +727,35 @@ def plot_replay(data, title, decimate=10):
     return fig, anim
 
 
+def save_animation(anim, path, fps=20):
+    """Write the replay out as a video or GIF.
+
+    Slow: every frame is a full 3D re-render, so a few hundred frames takes
+    a minute or two. Trimming the log first (the default) keeps this
+    manageable -- saving an untrimmed log with a long pad hold means
+    rendering thousands of frames of a motionless rocket.
+
+    .mp4 needs ffmpeg on PATH. .gif only needs pillow, which comes with
+    matplotlib, so it is the safer choice if ffmpeg isn't installed.
+    """
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    writer = "pillow" if ext == "gif" else "ffmpeg"
+
+    print(f"\n  Saving replay to {path} using {writer}...")
+    print("  (one 3D render per frame -- this takes a while)")
+
+    try:
+        anim.save(path, writer=writer, fps=fps, dpi=100)
+    except Exception as e:
+        sys.exit(f"\nCould not save the animation: {e}\n"
+                 f"  '{writer}' writer failed. An .mp4 needs ffmpeg installed "
+                 f"and on PATH;\n"
+                 f"  a .gif filename uses pillow instead, which ships with "
+                 f"matplotlib.")
+
+    print(f"  Wrote {path}")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -666,8 +768,17 @@ def main():
                    help="decode only flight N (1-based); default is the last")
     p.add_argument("--replay", action="store_true",
                    help="show the 3D orientation replay")
+    p.add_argument("--save-replay", metavar="PATH",
+                   help="write the replay to a file (.gif or .mp4); "
+                        "implies --replay")
     p.add_argument("--decimate", type=int, default=10,
                    help="replay frame skip (default 10 = ~20 fps)")
+    p.add_argument("--no-trim", action="store_true",
+                   help="plot the whole log instead of the boost window")
+    p.add_argument("--pre-boost", type=float, default=10.0, metavar="SEC",
+                   help="seconds of pad time to keep before BOOST (default 10)")
+    p.add_argument("--post-descent", type=float, default=10.0, metavar="SEC",
+                   help="seconds to keep after DESCENT (default 10)")
     p.add_argument("--no-plots", action="store_true",
                    help="print the summary only")
     args = p.parse_args()
@@ -702,6 +813,10 @@ def main():
         print(f"\n=== {title} ===")
 
         data = to_arrays(flight)
+
+        # Summary and CSV always describe the full flight. Only the plots and
+        # the replay get trimmed -- flag percentages computed over a trimmed
+        # window would be misleading.
         print_summary(data)
 
         if args.csv:
@@ -711,12 +826,27 @@ def main():
             write_csv(data, path)
 
         if not args.no_plots:
-            plot_overview(data, title)
-            plot_detail(data, title)
+            plot_data = data
+            if not args.no_trim:
+                plot_data, window = trim_flight(
+                    data, args.pre_boost, args.post_descent)
+                if window is not None:
+                    print(f"\n  Plotting {window[0]:.1f}-{window[1]:.1f} s "
+                          f"({len(plot_data['t'])} of {len(data['t'])} "
+                          f"records). Use --no-trim for everything.")
+                else:
+                    print("\n  No BOOST in this log -- plotting all of it.")
 
-            if args.replay:
-                # Held in a local so it isn't garbage collected before show().
-                _fig, _anim = plot_replay(data, title, args.decimate)
+            plot_overview(plot_data, title)
+            plot_detail(plot_data, title)
+
+            if args.replay or args.save_replay:
+                # Held in locals so the animation isn't garbage collected
+                # before show() or save() runs.
+                _fig, _anim = plot_replay(plot_data, title, args.decimate)
+                if args.save_replay:
+                    save_animation(_anim, args.save_replay,
+                                   fps=max(1, 200 // args.decimate))
 
             plt.show()
 

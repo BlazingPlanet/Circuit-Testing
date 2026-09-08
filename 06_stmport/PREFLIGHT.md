@@ -68,6 +68,7 @@ Verify flight constants match the docs:
 - [ ] Recovery system packed, latch engaged, shock cord clear of the gimbal
 - [ ] Barometer static port clear and unobstructed
 - [ ] All wiring secured, connectors seated, nothing that can shift under 2 g
+- [ ] Tape any servo connectors to their extenders at connection point to avoid accidental disconnect in flight
 - [ ] Board mounted solidly — IMU orientation must match what the sign check assumed
 
 ---
