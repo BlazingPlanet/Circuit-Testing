@@ -22,6 +22,10 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -31,6 +35,12 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
+#define CAL_MIN_US     800    // reject commands outside this window
+#define CAL_MAX_US     2200
+#define START_US       1500
+#define RAMP_STEP_US   10     // max change per ramp tick
+#define RAMP_PERIOD_MS 20     // -> 500 us/s, gentle on a fresh print
 
 /* USER CODE END PD */
 
@@ -48,6 +58,11 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
+static uint16_t target[2]  = {START_US, START_US};
+static uint16_t current[2] = {START_US, START_US};
+static char line[16];
+static uint8_t line_len = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -61,6 +76,45 @@ static void MX_USART2_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+static void uart_print(const char *s)
+{
+  HAL_UART_Transmit(&huart2, (uint8_t *)s, strlen(s), HAL_MAX_DELAY);
+}
+
+static void set_pwm(int ch, uint16_t us)
+{
+  __HAL_TIM_SET_COMPARE(&htim3, ch == 0 ? TIM_CHANNEL_1 : TIM_CHANNEL_2, us);
+}
+
+static void handle_line(char *s)
+{
+  char buf[64];
+  if (strcmp(s, "c") == 0) {
+    target[0] = target[1] = START_US;
+    uart_print("both -> center\r\n");
+    return;
+  }
+  if (strcmp(s, "?") == 0) {
+    snprintf(buf, sizeof buf, "A=%u B=%u\r\n", current[0], current[1]);
+    uart_print(buf);
+    return;
+  }
+  int ch;
+  if (s[0] == 'a') ch = 0;
+  else if (s[0] == 'b') ch = 1;
+  else { uart_print("use: a 1500 | b 1500 | c | ?\r\n"); return; }
+
+  long v = strtol(&s[1], NULL, 10);
+  if (v < CAL_MIN_US || v > CAL_MAX_US) {
+    snprintf(buf, sizeof buf, "rejected %ld (limits %d-%d)\r\n", v, CAL_MIN_US, CAL_MAX_US);
+    uart_print(buf);
+    return;
+  }
+  target[ch] = (uint16_t)v;
+  snprintf(buf, sizeof buf, "%c -> %u\r\n", 'A' + ch, target[ch]);
+  uart_print(buf);
+}
 
 /* USER CODE END 0 */
 
@@ -97,6 +151,13 @@ int main(void)
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
 
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+  set_pwm(0, START_US);
+  set_pwm(1, START_US);
+  uart_print("\r\nServo cal ready. a <us>, b <us>, c = center, ? = status\r\n");
+  uint32_t last_ramp = HAL_GetTick();
+
   /* USER CODE END 2 */
 
   /* Initialize leds */
@@ -113,7 +174,36 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    uint8_t c;
+    if (HAL_UART_Receive(&huart2, &c, 1, 1) == HAL_OK) {
+      if (c == '\r' || c == '\n') {
+        if (line_len > 0) {
+          uart_print("\r\n");
+          line[line_len] = '\0';
+          handle_line(line);
+          line_len = 0;
+        }
+      } else if ((c == 0x08 || c == 0x7F) && line_len > 0) {
+        line_len--;
+        uart_print("\b \b");
+      } else if (line_len < sizeof(line) - 1 && c >= 0x20 && c < 0x7F) {
+        line[line_len++] = c;
+        HAL_UART_Transmit(&huart2, &c, 1, HAL_MAX_DELAY);  // echo what you type
+      }
+    }
+
+    if (HAL_GetTick() - last_ramp >= RAMP_PERIOD_MS) {
+      last_ramp = HAL_GetTick();
+      for (int i = 0; i < 2; i++) {
+        if (current[i] < target[i])
+          current[i] = (target[i] - current[i] > RAMP_STEP_US) ? current[i] + RAMP_STEP_US : target[i];
+        else if (current[i] > target[i])
+          current[i] = (current[i] - target[i] > RAMP_STEP_US) ? current[i] - RAMP_STEP_US : target[i];
+        set_pwm(i, current[i]);
+      }
+    }
   }
+  
   /* USER CODE END 3 */
 }
 
