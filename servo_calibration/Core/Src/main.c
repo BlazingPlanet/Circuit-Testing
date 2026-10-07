@@ -37,7 +37,7 @@
 /* USER CODE BEGIN PD */
 
 #define CAL_MIN_US     800    // reject commands outside this window
-#define CAL_MAX_US     2200
+#define CAL_MAX_US     2400
 #define START_US       1500
 #define RAMP_STEP_US   10     // max change per ramp tick
 #define RAMP_PERIOD_MS 20     // -> 500 us/s, gentle on a fresh print
@@ -77,6 +77,8 @@ static void MX_USART2_UART_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+static const char axis_name[2] = {'Y', 'X'};  // [0] = CH1/PB4, [1] = CH2/PB5
+
 static void uart_print(const char *s)
 {
   HAL_UART_Transmit(&huart2, (uint8_t *)s, strlen(s), HAL_MAX_DELAY);
@@ -96,14 +98,14 @@ static void handle_line(char *s)
     return;
   }
   if (strcmp(s, "?") == 0) {
-    snprintf(buf, sizeof buf, "A=%u B=%u\r\n", current[0], current[1]);
+    snprintf(buf, sizeof buf, "Y=%u X=%u\r\n", current[0], current[1]);
     uart_print(buf);
     return;
   }
   int ch;
-  if (s[0] == 'a') ch = 0;
-  else if (s[0] == 'b') ch = 1;
-  else { uart_print("use: a 1500 | b 1500 | c | ?\r\n"); return; }
+  if (s[0] == 'y') ch = 0;
+  else if (s[0] == 'x') ch = 1;
+  else { uart_print("use: y 1500 | x 1500 | c | ?\r\n"); return; }
 
   long v = strtol(&s[1], NULL, 10);
   if (v < CAL_MIN_US || v > CAL_MAX_US) {
@@ -112,7 +114,7 @@ static void handle_line(char *s)
     return;
   }
   target[ch] = (uint16_t)v;
-  snprintf(buf, sizeof buf, "%c -> %u\r\n", 'A' + ch, target[ch]);
+  snprintf(buf, sizeof buf, "%c -> %u\r\n", axis_name[ch], target[ch]);
   uart_print(buf);
 }
 
@@ -155,7 +157,7 @@ int main(void)
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
   set_pwm(0, START_US);
   set_pwm(1, START_US);
-  uart_print("\r\nServo cal ready. a <us>, b <us>, c = center, ? = status\r\n");
+  uart_print("\r\nServo cal ready. y <us>, x <us>, c = center, ? = status\r\n");
   uint32_t last_ramp = HAL_GetTick();
 
   /* USER CODE END 2 */
